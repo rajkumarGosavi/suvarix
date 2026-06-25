@@ -7,6 +7,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_003).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_004).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_005).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute_batch(MIGRATION_006).map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
 }
 
@@ -271,4 +272,31 @@ CREATE TABLE IF NOT EXISTS goals (
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
+";
+
+const MIGRATION_006: &str = "
+CREATE TABLE IF NOT EXISTS app_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_name TEXT NOT NULL,
+    properties TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_events_name ON app_events(event_name);
+
+CREATE TABLE IF NOT EXISTS app_errors (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    error_type TEXT NOT NULL,
+    message    TEXT NOT NULL,
+    stack      TEXT,
+    context    TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS perf_metrics (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    metric_name TEXT NOT NULL,
+    value_ms    REAL NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_perf_name ON perf_metrics(metric_name);
 ";

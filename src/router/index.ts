@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
+import { invoke } from "@tauri-apps/api/core";
 
 const routes: RouteRecordRaw[] = [
     { path: "/", redirect: "/dashboard" },
@@ -25,6 +26,14 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
     history: createWebHashHistory(),
     routes,
+});
+
+let _navStart = 0;
+router.beforeEach(() => { _navStart = performance.now(); return true; });
+router.afterEach((to) => {
+    const ms = Math.round(performance.now() - _navStart);
+    invoke("track_perf", { metricName: `nav:${to.path}`, valueMs: ms }).catch(() => {});
+    invoke("track_event", { name: "page_viewed", properties: JSON.stringify({ path: to.path }) }).catch(() => {});
 });
 
 router.beforeEach(async (to) => {

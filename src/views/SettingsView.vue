@@ -7,6 +7,12 @@ import { useToast } from "primevue/usetoast";
 import { useUiStore } from "@/stores/ui";
 import type { Theme } from "@/stores/ui";
 
+// ─── Analytics types ─────────────────────────────────────────
+interface EventStat   { eventName: string; count: number; lastSeen: string; }
+interface ErrorEntry  { id: number; errorType: string; message: string; createdAt: string; }
+interface PerfStat    { metricName: string; avgMs: number; count: number; }
+interface AnalyticsExport { exportedAt: string; appVersion: string; events: EventStat[]; errors: ErrorEntry[]; perf: PerfStat[]; }
+
 const ui = useUiStore();
 
 // ─── Appearance ──────────────────────────────────────────────
@@ -141,11 +147,68 @@ async function doWipe() {
     }
 }
 
+// ─── Diagnostics ─────────────────────────────────────────────
+const eventStats  = ref<EventStat[]>([]);
+const errorLog    = ref<ErrorEntry[]>([]);
+const perfStats   = ref<PerfStat[]>([]);
+const diagLoading = ref(false);
+const exportingDiag = ref(false);
+
+async function loadDiagnostics() {
+    diagLoading.value = true;
+    try {
+        [eventStats.value, errorLog.value, perfStats.value] = await Promise.all([
+            invoke<EventStat[]>("get_event_stats"),
+            invoke<ErrorEntry[]>("get_error_log"),
+            invoke<PerfStat[]>("get_perf_stats"),
+        ]);
+    } finally {
+        diagLoading.value = false;
+    }
+}
+
+async function exportDiag() {
+    exportingDiag.value = true;
+    try {
+        const data = await invoke<AnalyticsExport>("export_analytics");
+        const json = JSON.stringify(data, null, 2);
+        const dest = await save({
+            defaultPath: `finfolio-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
+            filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!dest) return;
+        await invoke("write_csv", { path: dest, content: json });
+        toast.add({ severity: "success", summary: "Exported", detail: dest, life: 4000 });
+    } catch (e: any) {
+        toast.add({ severity: "error", summary: "Export failed", detail: String(e?.message ?? e), life: 5000 });
+    } finally {
+        exportingDiag.value = false;
+    }
+}
+
+function clearDiag() {
+    confirm.require({
+        message: "Delete all recorded events, errors, and performance data?",
+        header: "Clear Diagnostics",
+        icon: "pi pi-exclamation-triangle",
+        rejectProps: { label: "Cancel", severity: "secondary", outlined: true },
+        acceptProps: { label: "Clear", severity: "danger" },
+        accept: async () => {
+            await invoke("clear_analytics");
+            eventStats.value = [];
+            errorLog.value = [];
+            perfStats.value = [];
+            toast.add({ severity: "success", summary: "Diagnostics cleared", life: 2500 });
+        },
+    });
+}
+
 // ─── About ───────────────────────────────────────────────────
 const appDataDir = ref("");
 
 onMounted(async () => {
     await loadLockSetting();
+    await loadDiagnostics();
     try {
         appDataDir.value = await invoke<string>("get_app_data_dir");
     } catch { /* non-critical */ }
@@ -276,6 +339,80 @@ const APP_VERSION = "0.1.0";
             </div>
         </div>
 
+        <!-- Diagnostics -->
+        <div class="section-card">
+            <div class="diag-header">
+                <h2 style="margin:0">Diagnostics</h2>
+                <div class="diag-actions">
+                    <Button
+                        icon="pi pi-download"
+                        label="Export"
+                        size="small"
+                        outlined
+                        :loading="exportingDiag"
+                        @click="exportDiag"
+                    />
+                    <Button
+                        icon="pi pi-trash"
+                        label="Clear"
+                        size="small"
+                        outlined
+                        severity="danger"
+                        @click="clearDiag"
+                    />
+                </div>
+            </div>
+            <p class="diag-desc">
+                Usage events, errors, and performance data stored locally.
+                Export this file and share it with the developer for feedback.
+            </p>
+
+            <div v-if="diagLoading" class="diag-loading">
+                <ProgressSpinner style="width:28px;height:28px" />
+            </div>
+
+            <template v-else>
+                <!-- Feature usage -->
+                <h3 class="diag-section-title">Feature Usage</h3>
+                <div v-if="eventStats.length === 0" class="diag-empty">No events recorded yet.</div>
+                <DataTable v-else :value="eventStats" size="small" class="diag-table">
+                    <Column field="eventName" header="Event" />
+                    <Column field="count" header="Count" style="width:80px;text-align:right" />
+                    <Column field="lastSeen" header="Last seen" style="width:180px">
+                        <template #body="{ data }">
+                            {{ data.lastSeen ? new Date(data.lastSeen).toLocaleString("en-IN") : "—" }}
+                        </template>
+                    </Column>
+                </DataTable>
+
+                <Divider />
+
+                <!-- Recent errors -->
+                <h3 class="diag-section-title">Recent Errors</h3>
+                <div v-if="errorLog.length === 0" class="diag-empty">No errors recorded.</div>
+                <div v-else class="error-list">
+                    <div v-for="err in errorLog.slice(0, 10)" :key="err.id" class="error-entry">
+                        <span class="error-type">{{ err.errorType }}</span>
+                        <span class="error-msg">{{ err.message }}</span>
+                        <span class="error-time">{{ new Date(err.createdAt).toLocaleString("en-IN") }}</span>
+                    </div>
+                </div>
+
+                <Divider />
+
+                <!-- Performance -->
+                <h3 class="diag-section-title">Performance</h3>
+                <div v-if="perfStats.length === 0" class="diag-empty">No performance data yet.</div>
+                <DataTable v-else :value="perfStats" size="small" class="diag-table">
+                    <Column field="metricName" header="Screen / Event" />
+                    <Column header="Avg (ms)" style="width:100px;text-align:right">
+                        <template #body="{ data }">{{ Math.round(data.avgMs) }}</template>
+                    </Column>
+                    <Column field="count" header="Samples" style="width:90px;text-align:right" />
+                </DataTable>
+            </template>
+        </div>
+
         <!-- About -->
         <div class="section-card">
             <h2>About</h2>
@@ -360,6 +497,20 @@ label { font-size: 0.875rem; font-weight: 500; }
 }
 .about-label { font-weight: 600; font-size: 0.82rem; padding-top: 0.05rem; color: var(--p-text-muted-color); }
 .about-path { word-break: break-all; font-size: 0.83rem; font-family: monospace; }
+
+/* Diagnostics */
+.diag-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+.diag-actions { display: flex; gap: 0.5rem; }
+.diag-desc { font-size: 0.82rem; color: var(--p-text-muted-color); margin: 0 0 1.25rem; line-height: 1.5; }
+.diag-section-title { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.6rem; color: var(--p-text-muted-color); text-transform: uppercase; letter-spacing: 0.04em; }
+.diag-empty { font-size: 0.85rem; color: var(--p-text-muted-color); padding: 0.5rem 0; }
+.diag-loading { display: flex; justify-content: center; padding: 1.5rem 0; }
+.diag-table { font-size: 0.85rem; }
+.error-list { display: flex; flex-direction: column; gap: 0.4rem; }
+.error-entry { display: grid; grid-template-columns: 120px 1fr auto; gap: 0.5rem; align-items: baseline; font-size: 0.83rem; padding: 0.3rem 0; border-bottom: 1px solid var(--p-content-border-color); }
+.error-type { font-weight: 600; color: var(--p-red-400); font-size: 0.78rem; }
+.error-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.error-time { font-size: 0.75rem; color: var(--p-text-muted-color); white-space: nowrap; }
 
 /* Wipe dialog */
 .mt-input { margin-top: 0.75rem; }

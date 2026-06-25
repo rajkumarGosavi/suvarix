@@ -1,12 +1,14 @@
 import { ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { usePortfolioStore } from "@/stores/portfolio";
+import { useAnalytics } from "@/composables/useAnalytics";
 
 export function useHoldingCrud(addCmd: string, updateCmd: string, deleteCmd: string, fetchFn: () => Promise<void>) {
     const showDialog = ref(false);
     const editItem = ref<any>(null);
     const loading = ref(false);
     const portfolio = usePortfolioStore();
+    const { track } = useAnalytics();
 
     function openAdd() {
         editItem.value = null;
@@ -31,6 +33,7 @@ export function useHoldingCrud(addCmd: string, updateCmd: string, deleteCmd: str
             } else {
                 await invoke(addCmd, { payload });
             }
+            track("holding_saved", { cmd: addCmd });
             await fetchFn();
             await portfolio.fetchNetWorth();
             await portfolio.fetchAllocation();
@@ -44,6 +47,7 @@ export function useHoldingCrud(addCmd: string, updateCmd: string, deleteCmd: str
         loading.value = true;
         try {
             await invoke(deleteCmd, { id });
+            track("holding_deleted", { cmd: deleteCmd });
             await fetchFn();
             await portfolio.fetchNetWorth();
             await portfolio.fetchAllocation();

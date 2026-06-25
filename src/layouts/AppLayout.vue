@@ -4,11 +4,13 @@ import { useRouter, useRoute } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { useUiStore } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
+import { useAnalytics } from "@/composables/useAnalytics";
 
 const ui = useUiStore();
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
+const { track } = useAnalytics();
 
 function lock() {
     auth.lock();
@@ -31,6 +33,7 @@ async function loadLockSetting() {
 }
 
 onMounted(async () => {
+    track("app_opened");
     await loadLockSetting();
     ACTIVITY_EVENTS.forEach(e => window.addEventListener(e, onActivity, { passive: true }));
     lockTimer = setInterval(() => {

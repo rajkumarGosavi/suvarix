@@ -4,9 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { usePricesStore } from "@/stores/prices";
 import { useZerodhaStore } from "@/stores/zerodha";
 import { parseCasPdf, mergeCasHoldings, type CasMfHolding } from "@/utils/casMfParser";
+import { useAnalytics } from "@/composables/useAnalytics";
 
 const store = usePricesStore();
 const zerodha = useZerodhaStore();
+const { track } = useAnalytics();
 
 const apiKeyInput = ref("");
 const apiSecretInput = ref("");
@@ -105,6 +107,7 @@ async function importCas() {
         );
         casImportResult.value = result;
         casStep.value = 3;
+        track("cas_import_completed", { imported: result.imported, skipped: result.skipped });
     } catch (e: any) {
         casError.value = String(e?.message ?? e);
     } finally {

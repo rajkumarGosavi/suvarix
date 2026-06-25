@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import { createPinia } from "pinia";
 import router from "./router";
+import { useAnalytics } from "@/composables/useAnalytics";
 
 import "./style.css";
 import PrimeVue from "primevue/config";
@@ -25,5 +26,11 @@ app.use(PrimeVue, {
 app.use(ToastService);
 app.use(ConfirmationService);
 app.use(DialogService);
+
+app.config.errorHandler = (err, _vm, info) => {
+    const { trackError } = useAnalytics();
+    trackError("vue_error", String(err), info ?? undefined);
+    console.error(err);
+};
 
 app.mount("#app");

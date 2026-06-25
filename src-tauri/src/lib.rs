@@ -12,6 +12,7 @@ pub mod prices;
 pub mod reports;
 pub mod settings;
 pub mod transactions;
+pub mod analytics;
 pub mod data_sources;
 pub mod goals;
 
@@ -139,6 +140,15 @@ pub fn run() {
             goals::commands::add_goal,
             goals::commands::update_goal,
             goals::commands::delete_goal,
+            // analytics
+            analytics::commands::track_event,
+            analytics::commands::track_error,
+            analytics::commands::track_perf,
+            analytics::commands::get_event_stats,
+            analytics::commands::get_error_log,
+            analytics::commands::get_perf_stats,
+            analytics::commands::export_analytics,
+            analytics::commands::clear_analytics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

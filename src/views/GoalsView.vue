@@ -5,11 +5,13 @@ import { useGoalsStore, type GoalPayload } from "@/stores/goals";
 import { usePortfolioStore } from "@/stores/portfolio";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { strToDate, dateToStr } from "@/composables/useDateConvert";
+import { useAnalytics } from "@/composables/useAnalytics";
 
 const goalsStore = useGoalsStore();
 const portfolio = usePortfolioStore();
 const confirm = useConfirm();
 const { formatCompact } = useCurrencyFormat();
+const { track } = useAnalytics();
 
 // ─── dialog state ─────────────────────────────────────────────
 
@@ -73,6 +75,7 @@ async function saveGoal() {
         } else {
             await goalsStore.addGoal(payload);
         }
+        track("goal_saved", { category: payload.category });
         showDialog.value = false;
     } finally {
         saving.value = false;
