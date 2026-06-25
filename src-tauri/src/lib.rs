@@ -126,6 +126,13 @@ pub fn run() {
             settings::commands::wipe_all_data,
             settings::commands::get_app_data_dir,
             settings::commands::write_csv,
+            // data sources – zerodha
+            data_sources::commands::save_zerodha_config,
+            data_sources::commands::get_zerodha_status,
+            data_sources::commands::start_zerodha_login,
+            data_sources::commands::sync_zerodha_holdings,
+            data_sources::commands::disconnect_zerodha,
+            data_sources::commands::import_cas_mf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
