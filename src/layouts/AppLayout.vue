@@ -7,7 +7,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useAnalytics } from "@/composables/useAnalytics";
 import { useToast } from "primevue/usetoast";
 import { useRemindersStore } from "@/stores/reminders";
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { useNotifications } from "@/composables/useNotifications";
 
 const ui = useUiStore();
 const auth = useAuthStore();
@@ -16,6 +16,7 @@ const route = useRoute();
 const { track } = useAnalytics();
 const toast = useToast();
 const remindersStore = useRemindersStore();
+const { nativeNotify } = useNotifications();
 
 function lock() {
     auth.lock();
@@ -35,17 +36,6 @@ async function loadLockSetting() {
         const mins = parseInt(val, 10);
         autoLockMs = mins > 0 ? mins * 60 * 1000 : 0;
     } catch { /* key not set yet — use default */ }
-}
-
-async function nativeNotify(title: string, body: string) {
-    try {
-        let granted = await isPermissionGranted();
-        if (!granted) {
-            const perm = await requestPermission();
-            granted = perm === "granted";
-        }
-        if (granted) sendNotification({ title, body });
-    } catch { /* non-fatal */ }
 }
 
 async function checkReminders() {

@@ -452,3 +452,72 @@ pub fn apply_recurring(ids: Vec<i64>, state: State<DbState>) -> Result<i32> {
     }
     Ok(applied)
 }
+
+// ── Milestone commands ────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Milestone {
+    pub id: i64,
+    pub amount: f64,
+    pub label: String,
+    pub is_custom: i64,
+    pub achieved_at: Option<String>,
+    pub created_at: String,
+}
+
+fn map_milestone(r: &rusqlite::Row) -> rusqlite::Result<Milestone> {
+    Ok(Milestone {
+        id: r.get(0)?, amount: r.get(1)?, label: r.get(2)?,
+        is_custom: r.get(3)?, achieved_at: r.get(4)?, created_at: r.get(5)?,
+    })
+}
+
+/// Check net_worth against unachieved milestones. Marks crossed ones as achieved
+/// and returns only the newly crossed milestones so the caller can notify.
+#[tauri::command]
+pub fn check_milestones(net_worth: f64, state: State<DbState>) -> Result<Vec<Milestone>> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    let mut stmt = conn.prepare(
+        "SELECT id, amount, label, is_custom, achieved_at, created_at
+         FROM milestones WHERE amount <= ?1 AND achieved_at IS NULL ORDER BY amount ASC"
+    )?;
+    let newly: Vec<Milestone> = stmt.query_map([net_worth], map_milestone)?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !newly.is_empty() {
+        conn.execute(
+            "UPDATE milestones SET achieved_at = date('now') WHERE amount <= ?1 AND achieved_at IS NULL",
+            [net_worth],
+        )?;
+    }
+    Ok(newly)
+}
+
+#[tauri::command]
+pub fn list_milestones(state: State<DbState>) -> Result<Vec<Milestone>> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    let mut stmt = conn.prepare(
+        "SELECT id, amount, label, is_custom, achieved_at, created_at
+         FROM milestones ORDER BY amount ASC"
+    )?;
+    let rows = stmt.query_map([], map_milestone)?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+pub fn add_milestone(amount: f64, label: String, state: State<DbState>) -> Result<i64> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    conn.execute(
+        "INSERT INTO milestones (amount, label, is_custom) VALUES (?1,?2,1)",
+        rusqlite::params![amount, label],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn delete_milestone(id: i64, state: State<DbState>) -> Result<()> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    conn.execute("DELETE FROM milestones WHERE id=?1 AND is_custom=1", [id])?;
+    Ok(())
+}

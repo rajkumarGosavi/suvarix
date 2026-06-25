@@ -155,6 +155,10 @@ pub fn run() {
             reminders::commands::toggle_recurring,
             reminders::commands::get_due_recurring,
             reminders::commands::apply_recurring,
+            reminders::commands::check_milestones,
+            reminders::commands::list_milestones,
+            reminders::commands::add_milestone,
+            reminders::commands::delete_milestone,
             // analytics
             analytics::commands::track_event,
             analytics::commands::track_error,
