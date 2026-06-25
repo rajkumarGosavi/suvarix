@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useAnalytics } from "@/composables/useAnalytics";
 import { useToast } from "primevue/usetoast";
 import { useRemindersStore } from "@/stores/reminders";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
 const ui = useUiStore();
 const auth = useAuthStore();
@@ -36,19 +37,49 @@ async function loadLockSetting() {
     } catch { /* key not set yet — use default */ }
 }
 
+async function nativeNotify(title: string, body: string) {
+    try {
+        let granted = await isPermissionGranted();
+        if (!granted) {
+            const perm = await requestPermission();
+            granted = perm === "granted";
+        }
+        if (granted) sendNotification({ title, body });
+    } catch { /* non-fatal */ }
+}
+
+async function checkReminders() {
+    // Check recurring transactions due today
+    await remindersStore.loadDue();
+    const dueCount = remindersStore.dueRecurring.length;
+    if (dueCount > 0) {
+        const detail = `${dueCount} recurring transaction${dueCount > 1 ? "s" : ""} due today. Open Reminders to apply.`;
+        toast.add({ severity: "warn", summary: "Recurring transactions due", detail, life: 8000 });
+        nativeNotify("FinFolio — Recurring due", detail);
+    }
+
+    // Check bills, loans, credit cards due today or tomorrow (days=1)
+    const upcoming = await invoke<{ name: string; daysUntilDue: number }[]>(
+        "get_upcoming_reminders", { days: 1 }
+    ).catch(() => [] as { name: string; daysUntilDue: number }[]);
+    const todayBills = upcoming.filter(r => r.daysUntilDue <= 0);
+    const tomorrowBills = upcoming.filter(r => r.daysUntilDue === 1);
+
+    if (todayBills.length > 0) {
+        const names = todayBills.map(r => r.name).join(", ");
+        const detail = `Due today: ${names}`;
+        toast.add({ severity: "danger", summary: "Bills due today", detail, life: 10000 });
+        nativeNotify("FinFolio — Bills due today", detail);
+    } else if (tomorrowBills.length > 0) {
+        const names = tomorrowBills.map(r => r.name).join(", ");
+        toast.add({ severity: "warn", summary: "Bills due tomorrow", detail: names, life: 8000 });
+    }
+}
+
 onMounted(async () => {
     track("app_opened");
     await loadLockSetting();
-    remindersStore.loadDue().then(() => {
-        if (remindersStore.dueRecurring.length > 0) {
-            toast.add({
-                severity: "warn",
-                summary: "Recurring transactions due",
-                detail: `${remindersStore.dueRecurring.length} due today. Open Reminders to apply.`,
-                life: 8000,
-            });
-        }
-    });
+    checkReminders();
     ACTIVITY_EVENTS.forEach(e => window.addEventListener(e, onActivity, { passive: true }));
     lockTimer = setInterval(() => {
         if (auth.checkAutoLock(autoLockMs)) {
