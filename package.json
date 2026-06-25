@@ -16,6 +16,7 @@
     "@tauri-apps/plugin-opener": "^2",
     "@vueuse/core": "^11.3.0",
     "chart.js": "^4.5.1",
+    "pdfjs-dist": "^6.0.227",
     "pinia": "^2.3.1",
     "primeicons": "^7.0.0",
     "primevue": "^4.5.5",
