@@ -9,6 +9,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_005).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_006).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_007).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute_batch(MIGRATION_008).map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
 }
 
@@ -335,4 +336,26 @@ CREATE TABLE IF NOT EXISTS recurring_transactions (
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
+";
+
+const MIGRATION_008: &str = "
+CREATE TABLE IF NOT EXISTS milestones (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    amount      REAL NOT NULL UNIQUE,
+    label       TEXT NOT NULL,
+    is_custom   INTEGER NOT NULL DEFAULT 0,
+    achieved_at TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO milestones (amount, label, is_custom) VALUES
+    (100000,    '₹1 Lakh',     0),
+    (500000,    '₹5 Lakh',     0),
+    (1000000,   '₹10 Lakh',    0),
+    (2500000,   '₹25 Lakh',    0),
+    (5000000,   '₹50 Lakh',    0),
+    (10000000,  '₹1 Crore',    0),
+    (25000000,  '₹2.5 Crore',  0),
+    (50000000,  '₹5 Crore',    0),
+    (100000000, '₹10 Crore',   0);
 ";

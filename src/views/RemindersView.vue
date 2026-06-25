@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, computed, onMounted } from "vue";
 import { useConfirm } from "primevue/useconfirm";
 import { useToast } from "primevue/usetoast";
 import { useRemindersStore, type BillPayload, type RecurringTxPayload, type UpcomingReminder, type RecurringTx } from "@/stores/reminders";
@@ -236,12 +236,53 @@ function isOverdue(dateStr: string) {
     return dateStr < new Date().toISOString().split("T")[0];
 }
 
+// ─── Milestones ──────────────────────────────────────────────────────────────
+
+const showMilestoneDialog = ref(false);
+const milestoneForm = reactive({ amount: 0, label: "" });
+const milestoneLoading = ref(false);
+
+const achievedMilestones = computed(() => store.milestones.filter(m => m.achievedAt));
+const upcomingMilestones = computed(() => store.milestones.filter(m => !m.achievedAt));
+
+function openAddMilestone() {
+    milestoneForm.amount = 0;
+    milestoneForm.label = "";
+    showMilestoneDialog.value = true;
+}
+
+async function saveMilestone() {
+    milestoneLoading.value = true;
+    try {
+        await store.addMilestone(milestoneForm.amount, milestoneForm.label);
+        toast.add({ severity: "success", summary: "Milestone added", life: 2500 });
+        showMilestoneDialog.value = false;
+    } catch (e: any) {
+        toast.add({ severity: "error", summary: "Error", detail: String(e?.message ?? e), life: 4000 });
+    } finally { milestoneLoading.value = false; }
+}
+
+function deleteMilestone(id: number, label: string) {
+    confirm.require({
+        message: `Delete custom milestone "${label}"?`,
+        header: "Delete Milestone",
+        icon: "pi pi-exclamation-triangle",
+        rejectProps: { label: "Cancel", severity: "secondary", outlined: true },
+        acceptProps: { label: "Delete", severity: "danger" },
+        accept: async () => {
+            await store.deleteMilestone(id);
+            toast.add({ severity: "success", summary: "Deleted", life: 2000 });
+        },
+    });
+}
+
 onMounted(async () => {
     await Promise.all([
         store.loadUpcoming(30),
         store.fetchBills(),
         store.fetchRecurring(),
         store.loadDue(),
+        store.fetchMilestones(),
     ]);
 });
 </script>
@@ -256,6 +297,7 @@ onMounted(async () => {
             <TabList>
                 <Tab :value="0">Upcoming Bills</Tab>
                 <Tab :value="1">Recurring Transactions</Tab>
+                <Tab :value="2">Milestones</Tab>
             </TabList>
 
             <TabPanels>
@@ -384,6 +426,53 @@ onMounted(async () => {
                             </template>
                         </Column>
                     </DataTable>
+                </TabPanel>
+
+                <!-- ── Tab 3: Milestones ────────────────────────────────────── -->
+                <TabPanel :value="2">
+                    <div class="tab-toolbar">
+                        <span class="milestone-hint">Notifications fire automatically when your net worth crosses a milestone on the Dashboard.</span>
+                        <Button label="Add Custom" icon="pi pi-plus" size="small" @click="openAddMilestone" />
+                    </div>
+
+                    <!-- Achieved -->
+                    <div v-if="achievedMilestones.length > 0" class="milestone-section">
+                        <h3 class="milestone-heading achieved-heading">
+                            <i class="pi pi-check-circle" /> Achieved
+                        </h3>
+                        <div class="milestone-grid">
+                            <div v-for="m in achievedMilestones" :key="m.id" class="milestone-card milestone-achieved">
+                                <div class="milestone-icon">🏆</div>
+                                <div class="milestone-info">
+                                    <div class="milestone-label">{{ m.label }}</div>
+                                    <div class="milestone-date">Crossed on {{ m.achievedAt }}</div>
+                                </div>
+                                <Button v-if="m.isCustom" icon="pi pi-trash" text size="small" severity="danger" @click="deleteMilestone(m.id, m.label)" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Upcoming -->
+                    <div v-if="upcomingMilestones.length > 0" class="milestone-section">
+                        <h3 class="milestone-heading">
+                            <i class="pi pi-flag" /> Upcoming
+                        </h3>
+                        <div class="milestone-grid">
+                            <div v-for="m in upcomingMilestones" :key="m.id" class="milestone-card milestone-upcoming">
+                                <div class="milestone-icon">🎯</div>
+                                <div class="milestone-info">
+                                    <div class="milestone-label">{{ m.label }}</div>
+                                    <div class="milestone-amount">{{ formatINR(m.amount) }}</div>
+                                </div>
+                                <Button v-if="m.isCustom" icon="pi pi-trash" text size="small" severity="danger" @click="deleteMilestone(m.id, m.label)" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-if="store.milestones.length === 0" class="empty-state">
+                        <i class="pi pi-flag empty-icon" />
+                        <p>No milestones found.</p>
+                    </div>
                 </TabPanel>
             </TabPanels>
         </Tabs>
@@ -522,6 +611,24 @@ onMounted(async () => {
             />
         </template>
     </Dialog>
+
+    <!-- ── Add Custom Milestone Dialog ─────────────────────────────────────── -->
+    <Dialog v-model:visible="showMilestoneDialog" modal header="Add Custom Milestone" style="width:360px">
+        <div class="form-grid">
+            <div class="field">
+                <label>Label</label>
+                <InputText v-model="milestoneForm.label" fluid placeholder="e.g. Dream House Fund" />
+            </div>
+            <div class="field">
+                <label>Amount (₹)</label>
+                <InputNumber v-model="milestoneForm.amount" :min="1" :max-fraction-digits="0" fluid />
+            </div>
+        </div>
+        <template #footer>
+            <Button label="Cancel" severity="secondary" outlined @click="showMilestoneDialog = false" />
+            <Button label="Add" icon="pi pi-check" :loading="milestoneLoading" @click="saveMilestone" />
+        </template>
+    </Dialog>
 </template>
 
 <style scoped>
@@ -594,4 +701,47 @@ onMounted(async () => {
 .text-danger { color: var(--p-red-500); font-weight: 600; }
 
 :deep(.row-overdue td) { background: color-mix(in srgb, var(--p-orange-400) 8%, transparent) !important; }
+
+.milestone-hint { font-size: 0.8rem; color: var(--p-text-muted-color); align-self: center; }
+
+.milestone-section { margin-top: 1.25rem; }
+.milestone-heading {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--p-text-muted-color);
+    margin: 0 0 0.6rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.achieved-heading { color: var(--p-green-600); }
+
+.milestone-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.65rem;
+}
+
+.milestone-card {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--p-content-border-color);
+    background: var(--p-surface-card);
+}
+
+.milestone-achieved {
+    border-color: var(--p-green-400);
+    background: color-mix(in srgb, var(--p-green-400) 6%, var(--p-surface-card));
+}
+
+.milestone-icon { font-size: 1.4rem; flex-shrink: 0; }
+.milestone-info { flex: 1; min-width: 0; }
+.milestone-label { font-weight: 600; font-size: 0.875rem; }
+.milestone-date { font-size: 0.775rem; color: var(--p-text-muted-color); margin-top: 0.1rem; }
+.milestone-amount { font-size: 0.8rem; color: var(--p-text-muted-color); margin-top: 0.1rem; }
 </style>

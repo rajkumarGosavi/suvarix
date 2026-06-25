@@ -60,12 +60,22 @@ export interface UpcomingReminder {
     daysUntilDue: number;
 }
 
+export interface Milestone {
+    id: number;
+    amount: number;
+    label: string;
+    isCustom: number;
+    achievedAt: string | null;
+    createdAt: string;
+}
+
 export const useRemindersStore = defineStore("reminders", {
     state: () => ({
         bills: [] as Bill[],
         upcomingReminders: [] as UpcomingReminder[],
         recurringList: [] as RecurringTx[],
         dueRecurring: [] as RecurringTx[],
+        milestones: [] as Milestone[],
         loading: false,
     }),
     actions: {
@@ -117,6 +127,17 @@ export const useRemindersStore = defineStore("reminders", {
             await invoke("apply_recurring", { ids });
             await this.fetchRecurring();
             await this.loadDue();
+        },
+        async fetchMilestones() {
+            this.milestones = await invoke<Milestone[]>("list_milestones");
+        },
+        async addMilestone(amount: number, label: string) {
+            await invoke("add_milestone", { amount, label });
+            await this.fetchMilestones();
+        },
+        async deleteMilestone(id: number) {
+            await invoke("delete_milestone", { id });
+            await this.fetchMilestones();
         },
     },
 });
