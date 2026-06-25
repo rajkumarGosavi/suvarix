@@ -44,8 +44,8 @@ const trendChartData = computed(() => {
     return {
         labels: rows.map(t => t.month),
         datasets: [
-            { label: "Income", data: rows.map(t => t.income) },
-            { label: "Expense", data: rows.map(t => t.expense) },
+            { label: "Income", data: rows.map(t => t.income), backgroundColor: "#10b981", borderRadius: 4 },
+            { label: "Expense", data: rows.map(t => t.expense), backgroundColor: "#ef4444", borderRadius: 4 },
         ],
     };
 });
