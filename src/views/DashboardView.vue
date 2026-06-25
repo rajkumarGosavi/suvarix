@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, computed } from "vue";
 import { usePortfolioStore } from "@/stores/portfolio";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
+import { useChartColors } from "@/composables/useChartColors";
 import { Doughnut } from "vue-chartjs";
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from "chart.js";
 
@@ -9,25 +10,27 @@ ChartJS.register(ArcElement, Tooltip, Legend);
 
 const portfolio = usePortfolioStore();
 const { formatCompact, formatPercent } = useCurrencyFormat();
+const { textColor, PALETTE } = useChartColors();
 
 onMounted(() => portfolio.fetchAll());
 
-const chartData = {
-    get labels() {
-        return portfolio.allocation.map((a) => a.label);
-    },
-    get datasets() {
-        return [{
-            data: portfolio.allocation.map((a) => a.value),
-        }];
-    },
-};
+const chartData = computed(() => ({
+    labels: portfolio.allocation.map((a) => a.label),
+    datasets: [{
+        data: portfolio.allocation.map((a) => a.value),
+        backgroundColor: PALETTE,
+        borderWidth: 2,
+    }],
+}));
 
-const chartOptions = {
+const chartOptions = computed(() => ({
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-        legend: { position: "right" as const },
+        legend: {
+            position: "right" as const,
+            labels: { color: textColor.value, boxWidth: 14, padding: 12 },
+        },
         tooltip: {
             callbacks: {
                 label(ctx: any) {
@@ -37,7 +40,7 @@ const chartOptions = {
             },
         },
     },
-};
+}));
 </script>
 
 <template>

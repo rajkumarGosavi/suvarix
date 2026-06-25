@@ -97,7 +97,11 @@ function gainPct(item: any) {
             </Column>
             <Column header="Gain">
                 <template #body="{ data }">
-                    {{ gainPct(data) !== null ? gainPct(data) + '%' : '—' }}
+                    <span v-if="gainPct(data) !== null"
+                          :class="Number(gainPct(data)) >= 0 ? 'gain' : 'loss'">
+                        {{ gainPct(data) }}%
+                    </span>
+                    <span v-else>—</span>
                 </template>
             </Column>
             <Column field="rentalIncome" header="Rental/mo">

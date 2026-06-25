@@ -2,6 +2,7 @@
 import { onMounted, computed, ref } from "vue";
 import { useBudgetStore } from "@/stores/budget";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
+import { useChartColors } from "@/composables/useChartColors";
 import { Bar } from "vue-chartjs";
 import {
     Chart as ChartJS,
@@ -17,6 +18,7 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 const store = useBudgetStore();
 const { formatINR, formatCompact } = useCurrencyFormat();
+const { textColor, mutedColor, gridColor } = useChartColors();
 
 const PERIODS = [
     { label: "This Month", value: "this_month" },
@@ -48,11 +50,14 @@ const trendChartData = computed(() => {
     };
 });
 
-const trendChartOptions = {
+const trendChartOptions = computed(() => ({
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-        legend: { position: "top" as const },
+        legend: {
+            position: "top" as const,
+            labels: { color: textColor.value },
+        },
         tooltip: {
             callbacks: {
                 label: (ctx: any) => ` ${ctx.dataset.label}: ${formatINR(ctx.raw)}`,
@@ -60,11 +65,13 @@ const trendChartOptions = {
         },
     },
     scales: {
+        x: { ticks: { color: mutedColor.value }, grid: { color: gridColor.value } },
         y: {
-            ticks: { callback: (v: any) => formatCompact(Number(v)) },
+            ticks: { color: mutedColor.value, callback: (v: any) => formatCompact(Number(v)) },
+            grid: { color: gridColor.value },
         },
     },
-};
+}));
 
 // Budget dialog
 const showBudgetDialog = ref(false);
@@ -192,9 +199,14 @@ onMounted(() => store.fetchAll());
                     <Column header="Progress">
                         <template #body="{ data }">
                             <div class="budget-progress">
-                                <ProgressBar :value="Math.min(data.percentUsed, 100)" style="height:8px" />
-                                <span class="budget-amounts">
+                                <ProgressBar
+                                    :value="Math.min(data.percentUsed, 100)"
+                                    style="height:8px"
+                                    :pt="{ value: { style: data.percentUsed > 100 ? 'background:var(--p-red-500)' : '' } }"
+                                />
+                                <span class="budget-amounts" :class="data.percentUsed > 100 ? 'loss' : ''">
                                     {{ formatINR(data.spent) }} of {{ formatINR(data.monthlyLimit) }}
+                                    <span v-if="data.percentUsed > 100"> (+{{ (data.percentUsed - 100).toFixed(0) }}%)</span>
                                 </span>
                             </div>
                         </template>

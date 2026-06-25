@@ -472,8 +472,14 @@ label { font-size: 0.85rem; font-weight: 500; }
     gap: 1rem;
     margin-bottom: 1.25rem;
 }
-.amort-stat { display: flex; flex-direction: column; gap: 0.25rem; }
-.amort-stat-label { font-size: 0.75rem; font-weight: 500; }
+.amort-stat {
+    display: flex; flex-direction: column; gap: 0.25rem;
+    background: var(--p-surface-ground);
+    border: 1px solid var(--p-content-border-color);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+}
+.amort-stat-label { font-size: 0.75rem; font-weight: 500; color: var(--p-text-muted-color); }
 .amort-stat-value { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .amort-table { font-size: 0.85rem; }
 .amort-empty { text-align: center; padding: 2rem; }

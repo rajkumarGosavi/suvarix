@@ -51,3 +51,15 @@ body {
     color: var(--p-primary-color);
     letter-spacing: -0.5px;
 }
+
+/* ─── Count / secondary record labels ─────────────────────── */
+.count {
+    color: var(--p-text-muted-color);
+    font-size: 0.875rem;
+}
+
+/* ─── Empty-state icon muted ───────────────────────────────── */
+.empty-state .pi {
+    color: var(--p-text-muted-color);
+    opacity: 0.5;
+}

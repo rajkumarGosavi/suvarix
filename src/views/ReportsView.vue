@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useReportsStore } from "@/stores/reports";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
+import { useChartColors } from "@/composables/useChartColors";
 import { Line } from "vue-chartjs";
 import {
     Chart as ChartJS,
@@ -21,6 +22,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 
 const store = useReportsStore();
 const { formatINR, formatCompact } = useCurrencyFormat();
+const { textColor, mutedColor, gridColor } = useChartColors();
 
 const activeTab = ref(0);
 
@@ -66,11 +68,14 @@ const historyChartData = computed(() => ({
     ],
 }));
 
-const historyChartOptions = {
+const historyChartOptions = computed(() => ({
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-        legend: { position: "top" as const },
+        legend: {
+            position: "top" as const,
+            labels: { color: textColor.value },
+        },
         tooltip: {
             callbacks: {
                 label: (ctx: any) => ` ${ctx.dataset.label}: ${formatINR(ctx.raw)}`,
@@ -78,11 +83,13 @@ const historyChartOptions = {
         },
     },
     scales: {
+        x: { ticks: { color: mutedColor.value }, grid: { color: gridColor.value } },
         y: {
-            ticks: { callback: (v: any) => formatCompact(Number(v)) },
+            ticks: { color: mutedColor.value, callback: (v: any) => formatCompact(Number(v)) },
+            grid: { color: gridColor.value },
         },
     },
-};
+}));
 
 // ─── Capital Gains ────────────────────────────────────────────
 const METHODS = ["FIFO", "LIFO"];
