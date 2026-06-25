@@ -240,11 +240,11 @@ onMounted(() => store.fetchAll());
 .loading { display: flex; justify-content: center; padding: 4rem; }
 
 .summary-row { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
-.summary-card { flex: 1; min-width: 160px; border-radius: 12px; padding: 1.25rem 1.5rem; display: flex; flex-direction: column; gap: 0.35rem; }
-.summary-label { font-size: 0.8rem; }
+.summary-card { flex: 1; min-width: 160px; border-radius: 12px; padding: 1.25rem 1.5rem; display: flex; flex-direction: column; gap: 0.35rem; background: var(--p-content-background); border: 1px solid var(--p-content-border-color); }
+.summary-label { font-size: 0.8rem; color: var(--p-text-muted-color); }
 .summary-value { font-size: 1.4rem; font-weight: 700; }
 
-.card { border-radius: 12px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; }
+.card { border-radius: 12px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; background: var(--p-content-background); border: 1px solid var(--p-content-border-color); }
 .card h3 { margin: 0 0 1rem; font-size: 1rem; font-weight: 600; }
 .chart-wrap { height: 260px; }
 

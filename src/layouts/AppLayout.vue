@@ -63,7 +63,7 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
     <div class="app-shell">
         <nav class="sidebar" :class="{ collapsed: ui.sidebarCollapsed }">
             <div class="sidebar-brand">
-                <span v-if="!ui.sidebarCollapsed" class="brand-name">FinFolio</span>
+                <span v-if="!ui.sidebarCollapsed" class="brand-name logo-brand">FinFolio</span>
                 <Button
                     :icon="ui.sidebarCollapsed ? 'pi pi-bars' : 'pi pi-times'"
                     text
@@ -125,6 +125,8 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
     min-width: 220px;
     transition: width 0.2s ease, min-width 0.2s ease;
     overflow: hidden;
+    background: var(--p-surface-card);
+    border-right: 1px solid var(--p-content-border-color);
 }
 
 .sidebar.collapsed {
@@ -138,6 +140,7 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
     justify-content: space-between;
     padding: 0.75rem 0.6rem 0.75rem 1rem;
     min-height: 56px;
+    border-bottom: 1px solid var(--p-content-border-color);
 }
 
 .brand-name {
@@ -170,6 +173,10 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
 
 .nav-btn--active {
     font-weight: 600;
+    background: var(--p-primary-50) !important;
+    color: var(--p-primary-color) !important;
+    border-left: 3px solid var(--p-primary-color) !important;
+    padding-left: calc(0.75rem - 3px) !important;
 }
 
 .sidebar-footer {

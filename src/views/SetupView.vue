@@ -35,9 +35,9 @@ async function submit() {
 
 <template>
     <div class="setup-page">
-        <div class="setup-card">
+        <div class="setup-card fin-card">
             <div class="setup-logo">
-                <span class="logo-text">FinFolio</span>
+                <span class="logo-text logo-brand">FinFolio</span>
                 <p class="tagline">Your finances, on your machine.</p>
             </div>
 

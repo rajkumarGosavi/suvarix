@@ -1,0 +1,53 @@
+/* ─── Base ─────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    font-family: var(--p-font-family, system-ui, sans-serif);
+    font-size: 14px;
+    background-color: var(--p-surface-ground);
+    color: var(--p-text-color);
+    -webkit-font-smoothing: antialiased;
+}
+
+#app {
+    height: 100%;
+}
+
+/* ─── Card surface ─────────────────────────────────────────── */
+/* Global .fin-card used directly; also listed selectors for
+   components that keep their own class names. */
+.fin-card,
+.setup-card,
+.unlock-card {
+    background: var(--p-content-background);
+    border: 1px solid var(--p-content-border-color);
+    border-radius: 12px;
+}
+
+/* ─── Semantic P&L colours ─────────────────────────────────── */
+.gain {
+    color: var(--p-green-500);
+}
+
+.loss {
+    color: var(--p-red-500);
+}
+
+/* ─── Muted secondary text ─────────────────────────────────── */
+.text-muted {
+    color: var(--p-text-muted-color);
+}
+
+/* ─── Logo brand ───────────────────────────────────────────── */
+.logo-brand {
+    color: var(--p-primary-color);
+    letter-spacing: -0.5px;
+}

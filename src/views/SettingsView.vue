@@ -326,6 +326,8 @@ const APP_VERSION = "0.1.0";
     border-radius: 12px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
+    background: var(--p-content-background);
+    border: 1px solid var(--p-content-border-color);
 }
 .section-card h2 { margin: 0 0 1.25rem; font-size: 1.1rem; font-weight: 600; }
 

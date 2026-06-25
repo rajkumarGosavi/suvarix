@@ -195,7 +195,9 @@ onMounted(() => {
             </Column>
             <Column field="pnl" header="P&amp;L" sortable>
                 <template #body="{ data }">
-                    {{ formatINR(data.pnl) }} ({{ formatPercent(data.pnlPct) }})
+                    <span :class="data.pnl >= 0 ? 'gain' : 'loss'">
+                        {{ formatINR(data.pnl) }} ({{ formatPercent(data.pnlPct) }})
+                    </span>
                 </template>
             </Column>
             <Column field="isDirect" header="Type">

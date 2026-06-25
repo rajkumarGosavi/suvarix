@@ -332,11 +332,14 @@ onMounted(() => {
                                 <template #body="{ data }">{{ formatINR(data.sellPrice) }}</template>
                             </Column>
                             <Column field="gain" header="Gain / Loss" sortable>
-                                <template #body="{ data }">{{ formatINR(data.gain) }}</template>
+                                <template #body="{ data }">
+                                    <span :class="data.gain >= 0 ? 'gain' : 'loss'">{{ formatINR(data.gain) }}</span>
+                                </template>
                             </Column>
                             <Column field="gainType" header="Type" style="width:75px">
                                 <template #body="{ data }">
-                                    <Tag :value="data.gainType" size="small" />
+                                    <Tag :value="data.gainType" size="small"
+                                        :severity="data.gainType === 'STCG' ? 'warn' : 'success'" />
                                 </template>
                             </Column>
                         </DataTable>
@@ -372,7 +375,7 @@ onMounted(() => {
 
 .loading { display: flex; justify-content: center; padding: 4rem; }
 
-.chart-card { border-radius: 12px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; }
+.chart-card { border-radius: 12px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; background: var(--p-content-background); border: 1px solid var(--p-content-border-color); }
 .chart-wrap { height: 300px; }
 
 .history-table { margin-top: 0.5rem; }
@@ -396,8 +399,10 @@ onMounted(() => {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+    background: var(--p-content-background);
+    border: 1px solid var(--p-content-border-color);
 }
-.gains-label { font-size: 0.8rem; font-weight: 500; }
+.gains-label { font-size: 0.8rem; font-weight: 500; color: var(--p-text-muted-color); }
 .gains-value { font-size: 1.5rem; font-weight: 700; }
 .gains-note { font-size: 0.75rem; }
 
@@ -406,6 +411,8 @@ onMounted(() => {
     border-radius: 12px;
     padding: 1.25rem 1.5rem;
     margin-bottom: 1.5rem;
+    background: var(--p-content-background);
+    border: 1px solid var(--p-content-border-color);
 }
 .tax-panel-title { font-size: 0.95rem; font-weight: 600; display: block; margin-bottom: 0.75rem; }
 .tax-rows { display: flex; flex-direction: column; gap: 0.4rem; }
@@ -414,10 +421,17 @@ onMounted(() => {
     justify-content: space-between;
     font-size: 0.9rem;
     padding: 0.3rem 0;
-    border-bottom: 1px solid transparent;
+    border-bottom: 1px solid var(--p-content-border-color);
 }
-.total-row { font-weight: 700; font-size: 1rem; padding-top: 0.5rem; margin-top: 0.25rem; }
-.tax-disclaimer { font-size: 0.75rem; margin: 0.75rem 0 0; }
+.total-row {
+    font-weight: 700;
+    font-size: 1rem;
+    padding-top: 0.5rem;
+    margin-top: 0.25rem;
+    border-top: 2px solid var(--p-content-border-color);
+    border-bottom: none;
+}
+.tax-disclaimer { font-size: 0.75rem; margin: 0.75rem 0 0; color: var(--p-text-muted-color); font-style: italic; }
 
 .gains-table { margin-top: 0.5rem; }
 </style>

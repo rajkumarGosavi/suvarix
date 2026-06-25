@@ -112,12 +112,15 @@ const chartOptions = {
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 1rem;
+    background: var(--p-content-background);
+    border: 1px solid var(--p-content-border-color);
 }
 
 .nw-label {
     font-size: 0.85rem;
     display: block;
     margin-bottom: 0.25rem;
+    color: var(--p-text-muted-color);
 }
 
 .nw-value {
@@ -150,6 +153,12 @@ const chartOptions = {
     border-radius: 12px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
+    background: var(--p-content-background);
+    border: 1px solid var(--p-content-border-color);
+}
+
+.nw-item-label {
+    color: var(--p-text-muted-color);
 }
 
 .chart-card h3 {

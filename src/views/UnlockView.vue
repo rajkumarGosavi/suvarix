@@ -31,9 +31,9 @@ async function unlock() {
 
 <template>
     <div class="unlock-page">
-        <div class="unlock-card">
+        <div class="unlock-card fin-card">
             <div class="lock-icon">
-                <i class="pi pi-lock" style="font-size: 2.5rem" />
+                <i class="pi pi-lock" style="font-size: 2.5rem; color: var(--p-primary-color)" />
             </div>
             <h2>FinFolio is Locked</h2>
             <p class="hint">Enter your master password to continue.</p>
