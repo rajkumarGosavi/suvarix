@@ -14,6 +14,7 @@ pub struct CasHoldingInput {
     pub folio_number: String,
     pub units: f64,
     pub nav: f64,
+    pub avg_nav: f64,
     pub amc_name: String,
     pub is_direct: bool,
     pub is_growth: bool,
@@ -56,20 +57,22 @@ pub fn import_cas_mf(holdings: Vec<CasHoldingInput>, state: State<DbState>) -> R
                  (account_id, scheme_code, scheme_name, amc_name, folio_number,
                   units, avg_nav, current_nav, is_direct, is_growth,
                   created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,datetime('now'),datetime('now'))
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,datetime('now'),datetime('now'))
              ON CONFLICT(account_id, folio_number, scheme_code)
              DO UPDATE SET
                  units=excluded.units,
+                 avg_nav=excluded.avg_nav,
                  current_nav=excluded.current_nav,
                  updated_at=datetime('now')",
             rusqlite::params![
                 account_id,
-                h.isin,        // use ISIN as scheme_code until AMFI lookup is added
+                h.isin,
                 h.scheme_name,
                 h.amc_name,
                 h.folio_number,
                 h.units,
-                h.nav,         // avg_nav = current NAV from CAS (best available)
+                h.avg_nav,
+                h.nav,
                 h.is_direct as i64,
                 h.is_growth as i64,
             ],

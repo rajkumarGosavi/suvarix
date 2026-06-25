@@ -3,7 +3,7 @@ import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { usePricesStore } from "@/stores/prices";
 import { useZerodhaStore } from "@/stores/zerodha";
-import { parseCasPdf, type CasMfHolding } from "@/utils/casMfParser";
+import { parseCasPdf, mergeCasHoldings, type CasMfHolding } from "@/utils/casMfParser";
 
 const store = usePricesStore();
 const zerodha = useZerodhaStore();
@@ -26,37 +26,61 @@ onMounted(() => zerodha.fetchStatus());
 // ── CAS import state ────────────────────────────────────────────
 const casOpen = ref(false);
 const casStep = ref(1);
-const casFile = ref<File | null>(null);
+const casSummaryFile = ref<File | null>(null);
+const casDetailedFile = ref<File | null>(null);
 const casPassword = ref("");
 const casParsing = ref(false);
 const casImporting = ref(false);
 const casParsed = ref<CasMfHolding[]>([]);
 const casError = ref<string | null>(null);
 const casImportResult = ref<{ imported: number; skipped: number } | null>(null);
+const casRawLines = ref<string[]>([]);
 
 function casReset() {
     casStep.value = 1;
-    casFile.value = null;
+    casSummaryFile.value = null;
+    casDetailedFile.value = null;
     casPassword.value = "";
     casParsed.value = [];
     casError.value = null;
     casImportResult.value = null;
+    casRawLines.value = [];
 }
 
-function onCasFile(event: any) {
-    casFile.value = event.files?.[0] ?? null;
+function onCasSummaryFile(event: any) {
+    casSummaryFile.value = event.files?.[0] ?? null;
+}
+
+function onCasDetailedFile(event: any) {
+    casDetailedFile.value = event.files?.[0] ?? null;
 }
 
 async function parseCas() {
-    if (!casFile.value) return;
+    if (!casSummaryFile.value && !casDetailedFile.value) return;
     casParsing.value = true;
     casError.value = null;
     try {
-        const buffer = await casFile.value.arrayBuffer();
-        const holdings = await parseCasPdf(buffer, casPassword.value.trim());
+        const pw = casPassword.value.trim();
+        let holdings: CasMfHolding[] = [];
+
+        if (casSummaryFile.value && casDetailedFile.value) {
+            // Both uploaded — merge for best data
+            const [sumResult, detResult] = await Promise.all([
+                parseCasPdf(await casSummaryFile.value.arrayBuffer(), pw),
+                parseCasPdf(await casDetailedFile.value.arrayBuffer(), pw),
+            ]);
+            casRawLines.value = sumResult.rawLines;
+            holdings = mergeCasHoldings(sumResult.holdings, detResult.holdings);
+        } else {
+            const file = (casSummaryFile.value ?? casDetailedFile.value)!;
+            const result = await parseCasPdf(await file.arrayBuffer(), pw);
+            casRawLines.value = result.rawLines;
+            holdings = result.holdings;
+        }
+
         if (holdings.length === 0) {
             casError.value =
-                "No holdings found. Check the password or try a different CAS PDF.";
+                "No holdings found — see raw text below to check the PDF format.";
             return;
         }
         casParsed.value = holdings;
@@ -386,32 +410,56 @@ function formatTime(iso: string | null): string {
             <!-- Step 1: file + password -->
             <template v-if="casStep === 1">
                 <p class="cas-hint">
-                    Password = PAN (uppercase) + date of birth as
-                    <code>DDMMYYYY</code>. Example:
-                    <code>ABCDE1234F01011990</code>
+                    Upload one or both CAS files from
+                    <strong>MF Central</strong>. Uploading both gives the best result —
+                    ISINs from Detailed + cost basis from Summary.
                 </p>
                 <div class="cas-form">
-                    <div class="field">
-                        <label>CAS PDF File</label>
-                        <FileUpload
-                            mode="basic"
-                            accept=".pdf"
-                            :maxFileSize="20000000"
-                            chooseLabel="Choose PDF"
-                            customUpload
-                            auto
-                            @uploader="onCasFile"
-                        />
-                        <span v-if="casFile" class="cas-filename">{{ casFile.name }}</span>
+                    <div class="cas-file-row">
+                        <div class="field cas-file-slot">
+                            <label>
+                                Summary CAS
+                                <Tag value="Avg NAV / P&amp;L" severity="info" size="small" class="ml-1" />
+                            </label>
+                            <FileUpload
+                                mode="basic"
+                                accept=".pdf"
+                                :maxFileSize="20000000"
+                                chooseLabel="Choose PDF"
+                                customUpload
+                                auto
+                                @uploader="onCasSummaryFile"
+                            />
+                            <span v-if="casSummaryFile" class="cas-filename">{{ casSummaryFile.name }}</span>
+                        </div>
+                        <div class="field cas-file-slot">
+                            <label>
+                                Detailed CAS
+                                <Tag value="ISINs" severity="success" size="small" class="ml-1" />
+                            </label>
+                            <FileUpload
+                                mode="basic"
+                                accept=".pdf"
+                                :maxFileSize="20000000"
+                                chooseLabel="Choose PDF"
+                                customUpload
+                                auto
+                                @uploader="onCasDetailedFile"
+                            />
+                            <span v-if="casDetailedFile" class="cas-filename">{{ casDetailedFile.name }}</span>
+                        </div>
                     </div>
                     <div class="field">
-                        <label>Password</label>
+                        <label>
+                            Password
+                            <span class="cas-hint-inline">(PAN + DOB — same for both files)</span>
+                        </label>
                         <Password
                             v-model="casPassword"
                             :feedback="false"
                             toggleMask
                             fluid
-                            placeholder="PAN + DOB e.g. ABCDE1234F01011990"
+                            placeholder="e.g. ABCDE1234F01011990"
                         />
                     </div>
                     <Message v-if="casError" severity="error">{{ casError }}</Message>
@@ -419,9 +467,23 @@ function formatTime(iso: string | null): string {
                         label="Parse PDF"
                         icon="pi pi-search"
                         :loading="casParsing"
-                        :disabled="!casFile"
+                        :disabled="!casSummaryFile && !casDetailedFile"
                         @click="parseCas"
                     />
+                    <!-- Raw text debug panel — shown only when parsing produced no holdings -->
+                    <div v-if="casRawLines.length && !casParsed.length" class="cas-debug">
+                        <p class="cas-debug-label">
+                            Raw extracted text (first 300 lines) — share this to diagnose
+                            parser issues:
+                        </p>
+                        <Textarea
+                            :modelValue="casRawLines.join('\n')"
+                            :rows="12"
+                            readonly
+                            fluid
+                            class="cas-debug-text"
+                        />
+                    </div>
                 </div>
             </template>
 
@@ -444,6 +506,11 @@ function formatTime(iso: string | null): string {
                     <Column header="Units" style="width:100px">
                         <template #body="{ data }">
                             {{ data.units.toLocaleString("en-IN", { maximumFractionDigits: 3 }) }}
+                        </template>
+                    </Column>
+                    <Column header="Avg NAV" style="width:90px">
+                        <template #body="{ data }">
+                            {{ data.avgNav > 0 ? data.avgNav.toLocaleString("en-IN", { maximumFractionDigits: 4 }) : "—" }}
                         </template>
                     </Column>
                     <Column header="NAV" style="width:90px">
@@ -574,11 +641,22 @@ function formatTime(iso: string | null): string {
 .cas-form .field {
     display: flex; flex-direction: column; gap: 0.35rem;
 }
-.cas-form .field label { font-size: 0.83rem; font-weight: 600; }
+.cas-form .field label { font-size: 0.83rem; font-weight: 600; display: flex; align-items: center; gap: 0.35rem; }
+.cas-file-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+.cas-file-slot { min-width: 0; }
+.cas-hint-inline { font-size: 0.78rem; font-weight: 400; color: var(--p-text-muted-color); }
 .cas-filename {
     font-size: 0.8rem; color: var(--p-text-muted-color); margin-top: 0.2rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cas-table { margin-bottom: 0.5rem; font-size: 0.85rem; }
+.cas-debug { margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; }
+.cas-debug-label { font-size: 0.78rem; color: var(--p-text-muted-color); margin: 0; }
+.cas-debug-text { font-family: monospace; font-size: 0.75rem; }
 .cas-confirm-btns {
     display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem;
 }

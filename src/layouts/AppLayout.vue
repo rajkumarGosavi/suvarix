@@ -48,6 +48,7 @@ onUnmounted(() => {
 const navItems = [
     { path: "/dashboard",       icon: "pi pi-home",        label: "Dashboard" },
     { path: "/portfolio",       icon: "pi pi-briefcase",   label: "Portfolio" },
+    { path: "/goals",           icon: "pi pi-flag",        label: "Goals" },
     { path: "/transactions",    icon: "pi pi-list",        label: "Transactions" },
     { path: "/liabilities",     icon: "pi pi-credit-card", label: "Liabilities" },
     { path: "/income-expenses", icon: "pi pi-wallet",      label: "Income & Expenses" },

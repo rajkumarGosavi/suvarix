@@ -13,6 +13,7 @@ pub mod reports;
 pub mod settings;
 pub mod transactions;
 pub mod data_sources;
+pub mod goals;
 
 use db::DbState;
 
@@ -133,6 +134,11 @@ pub fn run() {
             data_sources::commands::sync_zerodha_holdings,
             data_sources::commands::disconnect_zerodha,
             data_sources::commands::import_cas_mf,
+            // goals
+            goals::commands::list_goals,
+            goals::commands::add_goal,
+            goals::commands::update_goal,
+            goals::commands::delete_goal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

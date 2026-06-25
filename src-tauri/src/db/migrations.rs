@@ -6,6 +6,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_002).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_003).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_004).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute_batch(MIGRATION_005).map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
 }
 
@@ -255,5 +256,19 @@ CREATE TABLE IF NOT EXISTS import_log (
     status           TEXT NOT NULL CHECK(status IN ('success','partial','failed')),
     error_message    TEXT,
     imported_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+";
+
+const MIGRATION_005: &str = "
+CREATE TABLE IF NOT EXISTS goals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    category      TEXT NOT NULL DEFAULT 'other'
+                      CHECK(category IN ('home','vehicle','education','retirement','travel','emergency','other')),
+    target_amount REAL NOT NULL,
+    target_date   TEXT NOT NULL,
+    notes         TEXT,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 ";
