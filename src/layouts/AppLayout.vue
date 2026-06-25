@@ -5,12 +5,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { useUiStore } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
 import { useAnalytics } from "@/composables/useAnalytics";
+import { useToast } from "primevue/usetoast";
+import { useRemindersStore } from "@/stores/reminders";
 
 const ui = useUiStore();
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
 const { track } = useAnalytics();
+const toast = useToast();
+const remindersStore = useRemindersStore();
 
 function lock() {
     auth.lock();
@@ -35,6 +39,16 @@ async function loadLockSetting() {
 onMounted(async () => {
     track("app_opened");
     await loadLockSetting();
+    remindersStore.loadDue().then(() => {
+        if (remindersStore.dueRecurring.length > 0) {
+            toast.add({
+                severity: "warn",
+                summary: "Recurring transactions due",
+                detail: `${remindersStore.dueRecurring.length} due today. Open Reminders to apply.`,
+                life: 8000,
+            });
+        }
+    });
     ACTIVITY_EVENTS.forEach(e => window.addEventListener(e, onActivity, { passive: true }));
     lockTimer = setInterval(() => {
         if (auth.checkAutoLock(autoLockMs)) {
@@ -54,6 +68,7 @@ const navItems = [
     { path: "/goals",           icon: "pi pi-flag",        label: "Goals" },
     { path: "/transactions",    icon: "pi pi-list",        label: "Transactions" },
     { path: "/liabilities",     icon: "pi pi-credit-card", label: "Liabilities" },
+    { path: "/reminders",      icon: "pi pi-bell",        label: "Reminders" },
     { path: "/income-expenses", icon: "pi pi-wallet",      label: "Income & Expenses" },
     { path: "/data-sources",    icon: "pi pi-database",    label: "Data Sources" },
     { path: "/reports",         icon: "pi pi-chart-bar",   label: "Reports" },

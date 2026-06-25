@@ -15,6 +15,7 @@ pub mod transactions;
 pub mod analytics;
 pub mod data_sources;
 pub mod goals;
+pub mod reminders;
 
 use db::DbState;
 
@@ -140,6 +141,20 @@ pub fn run() {
             goals::commands::add_goal,
             goals::commands::update_goal,
             goals::commands::delete_goal,
+            // reminders
+            reminders::commands::list_bills,
+            reminders::commands::add_bill,
+            reminders::commands::update_bill,
+            reminders::commands::delete_bill,
+            reminders::commands::get_upcoming_reminders,
+            reminders::commands::mark_reminder_paid,
+            reminders::commands::list_recurring,
+            reminders::commands::add_recurring,
+            reminders::commands::update_recurring,
+            reminders::commands::delete_recurring,
+            reminders::commands::toggle_recurring,
+            reminders::commands::get_due_recurring,
+            reminders::commands::apply_recurring,
             // analytics
             analytics::commands::track_event,
             analytics::commands::track_error,

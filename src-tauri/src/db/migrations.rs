@@ -8,6 +8,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_004).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_005).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_006).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute_batch(MIGRATION_007).map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
 }
 
@@ -299,4 +300,39 @@ CREATE TABLE IF NOT EXISTS perf_metrics (
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_perf_name ON perf_metrics(metric_name);
+";
+
+const MIGRATION_007: &str = "
+CREATE TABLE IF NOT EXISTS bills (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    category      TEXT NOT NULL DEFAULT 'utilities'
+                      CHECK(category IN ('utilities','rent','subscription','insurance','emi','tax','other')),
+    amount        REAL NOT NULL,
+    frequency     TEXT NOT NULL DEFAULT 'monthly'
+                      CHECK(frequency IN ('weekly','monthly','quarterly','yearly','one_time')),
+    next_due_date TEXT NOT NULL,
+    notes         TEXT,
+    is_active     INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS recurring_transactions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    type          TEXT NOT NULL,
+    amount        REAL NOT NULL,
+    category      TEXT NOT NULL,
+    asset_class   TEXT,
+    description   TEXT,
+    notes         TEXT,
+    frequency     TEXT NOT NULL DEFAULT 'monthly'
+                      CHECK(frequency IN ('daily','weekly','monthly','yearly')),
+    next_due_date TEXT NOT NULL,
+    last_run_date TEXT,
+    is_active     INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ";
