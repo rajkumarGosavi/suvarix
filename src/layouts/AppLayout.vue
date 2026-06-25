@@ -1,0 +1,189 @@
+<script setup lang="ts">
+import { onMounted, onUnmounted } from "vue";
+import { useRouter, useRoute } from "vue-router";
+import { invoke } from "@tauri-apps/api/core";
+import { useUiStore } from "@/stores/ui";
+import { useAuthStore } from "@/stores/auth";
+
+const ui = useUiStore();
+const auth = useAuthStore();
+const router = useRouter();
+const route = useRoute();
+
+function lock() {
+    auth.lock();
+    router.push("/unlock");
+}
+
+// ─── Auto-lock ────────────────────────────────────────────────
+const ACTIVITY_EVENTS = ["mousemove", "keydown", "mousedown", "touchstart"] as const;
+let lockTimer: ReturnType<typeof setInterval> | null = null;
+let autoLockMs = 15 * 60 * 1000; // default 15 min
+
+function onActivity() { auth.refreshActivity(); }
+
+async function loadLockSetting() {
+    try {
+        const val = await invoke<string>("get_setting", { key: "auto_lock_minutes" });
+        const mins = parseInt(val, 10);
+        autoLockMs = mins > 0 ? mins * 60 * 1000 : 0;
+    } catch { /* key not set yet — use default */ }
+}
+
+onMounted(async () => {
+    await loadLockSetting();
+    ACTIVITY_EVENTS.forEach(e => window.addEventListener(e, onActivity, { passive: true }));
+    lockTimer = setInterval(() => {
+        if (auth.checkAutoLock(autoLockMs)) {
+            router.push("/unlock");
+        }
+    }, 60_000);
+});
+
+onUnmounted(() => {
+    ACTIVITY_EVENTS.forEach(e => window.removeEventListener(e, onActivity));
+    if (lockTimer) clearInterval(lockTimer);
+});
+
+const navItems = [
+    { path: "/dashboard",       icon: "pi pi-home",        label: "Dashboard" },
+    { path: "/portfolio",       icon: "pi pi-briefcase",   label: "Portfolio" },
+    { path: "/transactions",    icon: "pi pi-list",        label: "Transactions" },
+    { path: "/liabilities",     icon: "pi pi-credit-card", label: "Liabilities" },
+    { path: "/income-expenses", icon: "pi pi-wallet",      label: "Income & Expenses" },
+    { path: "/data-sources",    icon: "pi pi-database",    label: "Data Sources" },
+    { path: "/reports",         icon: "pi pi-chart-bar",   label: "Reports" },
+    { path: "/settings",        icon: "pi pi-cog",         label: "Settings" },
+];
+
+const isActive = (path: string) => route.path === path || route.path.startsWith(path + "/");
+</script>
+
+<template>
+    <div class="app-shell">
+        <nav class="sidebar" :class="{ collapsed: ui.sidebarCollapsed }">
+            <div class="sidebar-brand">
+                <span v-if="!ui.sidebarCollapsed" class="brand-name">FinFolio</span>
+                <Button
+                    :icon="ui.sidebarCollapsed ? 'pi pi-bars' : 'pi pi-times'"
+                    text
+                    size="small"
+                    @click="ui.toggleSidebar()"
+                    class="toggle-btn"
+                    aria-label="Toggle sidebar"
+                />
+            </div>
+
+            <div class="nav-list">
+                <Button
+                    v-for="item in navItems"
+                    :key="item.path"
+                    :icon="item.icon"
+                    :label="ui.sidebarCollapsed ? undefined : item.label"
+                    text
+                    class="nav-btn"
+                    :class="{ 'nav-btn--active': isActive(item.path) }"
+                    @click="router.push(item.path)"
+                    :aria-label="item.label"
+                    v-tooltip.right="ui.sidebarCollapsed ? item.label : undefined"
+                />
+            </div>
+
+            <div class="sidebar-footer">
+                <Divider />
+                <Button
+                    icon="pi pi-lock"
+                    :label="ui.sidebarCollapsed ? undefined : 'Lock App'"
+                    text
+                    class="nav-btn lock-btn"
+                    @click="lock"
+                    v-tooltip.right="ui.sidebarCollapsed ? 'Lock App' : undefined"
+                />
+            </div>
+        </nav>
+
+        <main class="main-content">
+            <RouterView />
+        </main>
+    </div>
+
+    <Toast position="bottom-right" />
+    <ConfirmDialog />
+</template>
+
+<style scoped>
+.app-shell {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 220px;
+    min-width: 220px;
+    transition: width 0.2s ease, min-width 0.2s ease;
+    overflow: hidden;
+}
+
+.sidebar.collapsed {
+    width: 62px;
+    min-width: 62px;
+}
+
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 0.6rem 0.75rem 1rem;
+    min-height: 56px;
+}
+
+.brand-name {
+    font-size: 1.15rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.toggle-btn {
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+.nav-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.75rem 0.4rem;
+    overflow-y: auto;
+}
+
+.nav-btn {
+    width: 100%;
+    justify-content: flex-start;
+    border-radius: 8px !important;
+    font-size: 0.875rem;
+    white-space: nowrap;
+}
+
+.nav-btn--active {
+    font-weight: 600;
+}
+
+.sidebar-footer {
+    padding: 0 0.4rem 0.5rem;
+}
+
+.lock-btn {
+    width: 100%;
+    justify-content: flex-start;
+}
+
+.main-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.75rem 2rem;
+}
+</style>

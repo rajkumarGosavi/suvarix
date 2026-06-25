@@ -1,0 +1,13 @@
+pub mod account;
+pub mod budget;
+pub mod crypto;
+pub mod equity;
+pub mod fd;
+pub mod gold;
+pub mod insurance;
+pub mod loan;
+pub mod mf;
+pub mod ppf_epf;
+pub mod real_estate;
+pub mod settings;
+pub mod transaction;
