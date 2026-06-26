@@ -107,7 +107,10 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     } else {
         NaiveDate::from_ymd_opt(year, month + 1, 1)
     };
-    next.unwrap().signed_duration_since(NaiveDate::from_ymd_opt(year, month, 1).unwrap()).num_days() as u32
+    match (next, NaiveDate::from_ymd_opt(year, month, 1)) {
+        (Some(n), Some(f)) => n.signed_duration_since(f).num_days() as u32,
+        _ => 30,
+    }
 }
 
 // ── Bill commands ─────────────────────────────────────────────────────────────
@@ -265,22 +268,24 @@ pub fn mark_reminder_paid(
     notes: Option<String>,
     state: State<DbState>,
 ) -> Result<()> {
-    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    let mut conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
 
     match source.as_str() {
         "loan" => {
             let lender: String = conn.query_row(
                 "SELECT lender_name FROM loans WHERE id=?1", [source_id], |r| r.get(0),
             ).map_err(|_| AppError::NotFound("loan".into()))?;
-            conn.execute(
+            let tx = conn.transaction()?;
+            tx.execute(
                 "INSERT INTO transactions (date, type, category, description, amount, notes)
                  VALUES (?1,'emi','EMI',?2,?3,?4)",
                 rusqlite::params![date, lender, amount, notes],
             )?;
-            conn.execute(
+            tx.execute(
                 "UPDATE loans SET next_emi_date = date(next_emi_date, '+1 month') WHERE id=?1",
                 [source_id],
             )?;
+            tx.commit()?;
         }
         "credit_card" => {
             let (bank, card): (String, Option<String>) = conn.query_row(
@@ -288,39 +293,40 @@ pub fn mark_reminder_paid(
                 |r| Ok((r.get(0)?, r.get(1)?)),
             ).map_err(|_| AppError::NotFound("credit card".into()))?;
             let label = card.map(|c| format!("{} {}", bank, c)).unwrap_or(bank);
-            conn.execute(
+            let tx = conn.transaction()?;
+            tx.execute(
                 "INSERT INTO transactions (date, type, category, description, amount, notes)
                  VALUES (?1,'expense','Credit Card',?2,?3,?4)",
                 rusqlite::params![date, label, amount, notes],
             )?;
+            tx.commit()?;
         }
         "bill" => {
-            let (name, freq): (String, String) = conn.query_row(
-                "SELECT name, frequency FROM bills WHERE id=?1", [source_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+            let (name, freq, category, current_due): (String, String, String, String) = conn.query_row(
+                "SELECT name, frequency, category, next_due_date FROM bills WHERE id=?1",
+                [source_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             ).map_err(|_| AppError::NotFound("bill".into()))?;
-            let current_due: String = conn.query_row(
-                "SELECT next_due_date FROM bills WHERE id=?1", [source_id], |r| r.get(0),
-            ).map_err(|_| AppError::NotFound("bill".into()))?;
-            let (category,): (String,) = conn.query_row(
-                "SELECT category FROM bills WHERE id=?1", [source_id],
-                |r| Ok((r.get(0)?,)),
-            ).map_err(|_| AppError::NotFound("bill".into()))?;
-            conn.execute(
+            let next_due = if freq != "one_time" {
+                NaiveDate::parse_from_str(&current_due, "%Y-%m-%d")
+                    .ok()
+                    .map(|d| advance_date(d, &freq).format("%Y-%m-%d").to_string())
+            } else {
+                None
+            };
+            let tx = conn.transaction()?;
+            tx.execute(
                 "INSERT INTO transactions (date, type, category, description, amount, notes)
                  VALUES (?1,'expense',?2,?3,?4,?5)",
                 rusqlite::params![date, category, name, amount, notes],
             )?;
-            // Advance next_due_date unless one_time
-            if freq != "one_time" {
-                if let Ok(due) = NaiveDate::parse_from_str(&current_due, "%Y-%m-%d") {
-                    let next = advance_date(due, &freq);
-                    conn.execute(
-                        "UPDATE bills SET next_due_date=?1, updated_at=datetime('now') WHERE id=?2",
-                        rusqlite::params![next.format("%Y-%m-%d").to_string(), source_id],
-                    )?;
-                }
+            if let Some(next) = next_due {
+                tx.execute(
+                    "UPDATE bills SET next_due_date=?1, updated_at=datetime('now') WHERE id=?2",
+                    rusqlite::params![next, source_id],
+                )?;
             }
+            tx.commit()?;
         }
         _ => return Err(AppError::Database("unknown reminder source".into())),
     }

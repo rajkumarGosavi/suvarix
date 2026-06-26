@@ -2,6 +2,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::{timeout, Duration};
 
+use crate::data_sources::broker::BrokerHolding;
 use crate::error::{AppError, Result};
 
 const UPSTOX_BASE: &str = "https://api.upstox.com/v2";
@@ -17,6 +18,20 @@ pub struct UpstoxHolding {
     pub average_price: f64,
     pub last_price: f64,
     pub company_name: Option<String>,
+}
+
+impl From<UpstoxHolding> for BrokerHolding {
+    fn from(h: UpstoxHolding) -> Self {
+        Self {
+            symbol: h.tradingsymbol.clone(),
+            exchange: h.exchange,
+            isin: h.isin,
+            quantity: h.quantity,
+            avg_price: h.average_price,
+            current_price: h.last_price,
+            name: h.company_name,
+        }
+    }
 }
 
 /// Extract the `code` query param from a raw HTTP GET request line.
@@ -114,7 +129,7 @@ pub async fn run_oauth_flow(
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = response.text().await.unwrap_or_else(|e| format!("[failed to read body: {e}]"));
         return Err(AppError::ExternalApi(format!(
             "Upstox API returned {status}: {text}"
         )));
@@ -149,7 +164,7 @@ pub async fn fetch_holdings(
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = response.text().await.unwrap_or_else(|e| format!("[failed to read body: {e}]"));
         return Err(AppError::ExternalApi(format!(
             "Upstox API returned {status}: {text}"
         )));

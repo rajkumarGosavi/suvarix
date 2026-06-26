@@ -12,8 +12,14 @@ impl DbState {
         let conn = Connection::open(db_path)
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA busy_timeout=5000;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA temp_store=MEMORY;",
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
 
         migrations::run_migrations(&conn)?;
 

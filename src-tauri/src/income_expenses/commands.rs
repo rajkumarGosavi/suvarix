@@ -2,7 +2,7 @@ use tauri::State;
 use serde::{Deserialize, Serialize};
 use crate::db::DbState;
 use crate::error::{AppError, Result};
-use crate::models::budget::{Budget, BudgetStatus};
+use crate::models::budget::BudgetStatus;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,27 +49,31 @@ pub fn get_category_summary(period: String, state: State<DbState>) -> Result<Vec
 pub fn get_budget_status(state: State<DbState>) -> Result<Vec<BudgetStatus>> {
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     let (start, end) = current_month_bounds();
-    let mut stmt = conn.prepare("SELECT id, category, monthly_limit, period, is_active FROM budgets WHERE is_active=1")?;
-    let budgets: Vec<Budget> = stmt.query_map([], |r| Ok(Budget {
-        id: r.get(0)?, category: r.get(1)?, monthly_limit: r.get(2)?,
-        period: r.get(3)?, is_active: r.get::<_, i64>(4)? != 0,
-    }))?.filter_map(|r| r.ok()).collect();
-
-    let mut result = vec![];
-    for b in budgets {
-        let spent: f64 = conn.query_row(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions
-             WHERE type='expense' AND category=?1 AND date>=?2 AND date<=?3",
-            rusqlite::params![&b.category, &start, &end],
-            |r| r.get(0),
-        ).unwrap_or(0.0);
-
-        let remaining = (b.monthly_limit - spent).max(0.0);
-        let percent_used = if b.monthly_limit > 0.0 {
-            ((spent / b.monthly_limit) * 10000.0).round() / 100.0
+    let mut stmt = conn.prepare(
+        "SELECT b.category, b.monthly_limit,
+                COALESCE(SUM(t.amount), 0.0) AS spent
+         FROM budgets b
+         LEFT JOIN transactions t
+           ON  t.category = b.category
+           AND t.type     = 'expense'
+           AND t.date    >= ?1
+           AND t.date    <= ?2
+         WHERE b.is_active = 1
+         GROUP BY b.id, b.category, b.monthly_limit",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![&start, &end], |r| {
+        let category: String = r.get(0)?;
+        let monthly_limit: f64 = r.get(1)?;
+        let spent: f64 = r.get(2)?;
+        Ok((category, monthly_limit, spent))
+    })?;
+    let result = rows.filter_map(|r| r.ok()).map(|(category, monthly_limit, spent)| {
+        let remaining = (monthly_limit - spent).max(0.0);
+        let percent_used = if monthly_limit > 0.0 {
+            ((spent / monthly_limit) * 10000.0).round() / 100.0
         } else { 0.0 };
-        result.push(BudgetStatus { category: b.category, monthly_limit: b.monthly_limit, spent, remaining, percent_used });
-    }
+        BudgetStatus { category, monthly_limit, spent, remaining, percent_used }
+    }).collect();
     Ok(result)
 }
 
@@ -112,9 +116,11 @@ fn period_bounds(period: &str) -> (String, String) {
 fn last_month_bounds() -> (String, String) {
     use chrono::{Datelike, Local, NaiveDate};
     let now = Local::now();
-    let first_of_this = NaiveDate::from_ymd_opt(now.year(), now.month(), 1).unwrap();
-    let last_of_prev = first_of_this.pred_opt().unwrap();
-    let first_of_prev = NaiveDate::from_ymd_opt(last_of_prev.year(), last_of_prev.month(), 1).unwrap();
+    let first_of_this = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+        .unwrap_or_else(|| NaiveDate::from_ymd_opt(now.year(), 1, 1).expect("Jan 1 is always valid"));
+    let last_of_prev = first_of_this.pred_opt().unwrap_or(first_of_this);
+    let first_of_prev = NaiveDate::from_ymd_opt(last_of_prev.year(), last_of_prev.month(), 1)
+        .unwrap_or(last_of_prev);
     (first_of_prev.to_string(), last_of_prev.to_string())
 }
 

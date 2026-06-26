@@ -3,6 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::{timeout, Duration};
 
+use crate::data_sources::broker::BrokerHolding;
 use crate::error::{AppError, Result};
 
 const KITE_BASE: &str = "https://api.kite.trade";
@@ -16,6 +17,20 @@ pub struct KiteHolding {
     pub quantity: f64,
     pub average_price: f64,
     pub last_price: f64,
+}
+
+impl From<KiteHolding> for BrokerHolding {
+    fn from(h: KiteHolding) -> Self {
+        Self {
+            symbol: h.tradingsymbol.clone(),
+            exchange: h.exchange,
+            isin: h.isin,
+            quantity: h.quantity,
+            avg_price: h.average_price,
+            current_price: h.last_price,
+            name: None, // Kite holdings API does not return company name
+        }
+    }
 }
 
 fn compute_checksum(api_key: &str, request_token: &str, api_secret: &str) -> String {
@@ -114,7 +129,7 @@ pub async fn run_oauth_flow(
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = response.text().await.unwrap_or_else(|e| format!("[failed to read body: {e}]"));
         return Err(AppError::ExternalApi(format!(
             "Kite API returned {status}: {text}"
         )));
@@ -149,7 +164,7 @@ pub async fn fetch_holdings(api_key: &str, access_token: &str) -> Result<Vec<Kit
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = response.text().await.unwrap_or_else(|e| format!("[failed to read body: {e}]"));
         return Err(AppError::ExternalApi(format!(
             "Kite API returned {status}: {text}"
         )));

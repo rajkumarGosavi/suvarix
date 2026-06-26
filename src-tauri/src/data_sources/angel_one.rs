@@ -1,3 +1,4 @@
+use crate::data_sources::broker::BrokerHolding;
 use crate::error::{AppError, Result};
 
 const ANGEL_BASE: &str = "https://apiconnect.angelbroking.com";
@@ -12,6 +13,20 @@ pub struct AngelHolding {
     #[serde(rename = "averageprice")]
     pub average_price: f64,
     pub ltp: f64,
+}
+
+impl From<AngelHolding> for BrokerHolding {
+    fn from(h: AngelHolding) -> Self {
+        Self {
+            symbol: h.tradingsymbol.clone(),
+            exchange: h.exchange,
+            isin: h.isin,
+            quantity: h.quantity,
+            avg_price: h.average_price,
+            current_price: h.ltp,
+            name: None, // SmartAPI holdings API does not return company name
+        }
+    }
 }
 
 /// Authenticate with Angel One SmartAPI using client credentials + TOTP.
@@ -48,7 +63,7 @@ pub async fn login(
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = response.text().await.unwrap_or_else(|e| format!("[failed to read body: {e}]"));
         return Err(AppError::ExternalApi(format!(
             "Angel One API returned {status}: {text}"
         )));
@@ -92,7 +107,7 @@ pub async fn fetch_holdings(api_key: &str, jwt_token: &str) -> Result<Vec<AngelH
 
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
+        let text = response.text().await.unwrap_or_else(|e| format!("[failed to read body: {e}]"));
         return Err(AppError::ExternalApi(format!(
             "Angel One API returned {status}: {text}"
         )));

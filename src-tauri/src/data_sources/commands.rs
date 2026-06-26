@@ -3,6 +3,7 @@ use tauri::State;
 use crate::db::DbState;
 use crate::error::{AppError, Result};
 use super::angel_one;
+use super::broker;
 use super::upstox;
 use super::zerodha;
 
@@ -283,63 +284,14 @@ pub async fn sync_zerodha_holdings(state: State<'_, DbState>) -> Result<SyncResu
     };
 
     // Fetch from Kite API (no lock held during HTTP)
-    let holdings = zerodha::fetch_holdings(&api_key, &access_token).await?;
+    let raw = zerodha::fetch_holdings(&api_key, &access_token).await?;
+    let holdings: Vec<broker::BrokerHolding> = raw.into_iter().map(Into::into).collect();
     let synced = holdings.len() as i64;
 
     // Write to DB (lock → write → release)
     {
-        let mut conn = state
-            .0
-            .lock()
-            .map_err(|_| AppError::Database("lock error".into()))?;
-
-        // Ensure a Zerodha broker account exists
-        conn.execute(
-            "INSERT OR IGNORE INTO accounts
-                 (name, type, provider, is_active, created_at, updated_at)
-             VALUES ('Zerodha', 'broker', 'zerodha', 1, datetime('now'), datetime('now'))",
-            [],
-        )?;
-
-        let account_id: i64 = conn.query_row(
-            "SELECT id FROM accounts WHERE provider='zerodha'",
-            [],
-            |r| r.get(0),
-        )?;
-
-        // Atomically replace all Zerodha equity holdings
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM equity_holdings WHERE account_id=?1",
-            [account_id],
-        )?;
-
-        let price_ts = chrono::Local::now()
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
-
-        for h in &holdings {
-            tx.execute(
-                "INSERT INTO equity_holdings
-                     (account_id, isin, symbol, exchange, name,
-                      quantity, avg_buy_price, current_price, price_updated_at,
-                      created_at, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,datetime('now'),datetime('now'))",
-                rusqlite::params![
-                    account_id,
-                    h.isin,
-                    h.tradingsymbol,
-                    h.exchange,
-                    h.tradingsymbol, // name = tradingsymbol (no company name in Kite holdings API)
-                    h.quantity,
-                    h.average_price,
-                    h.last_price,
-                    price_ts,
-                ],
-            )?;
-        }
-
-        tx.commit()?;
+        let mut conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+        broker::write_broker_holdings(&mut conn, "zerodha", "Zerodha", &holdings)?;
     }
 
     Ok(SyncResult { synced, errors: vec![] })
@@ -490,53 +442,14 @@ pub async fn sync_upstox_holdings(state: State<'_, DbState>) -> Result<SyncResul
     };
 
     // Fetch from Upstox API (no lock held during HTTP)
-    let holdings = upstox::fetch_holdings(&api_key, &access_token).await?;
+    let raw = upstox::fetch_holdings(&api_key, &access_token).await?;
+    let holdings: Vec<broker::BrokerHolding> = raw.into_iter().map(Into::into).collect();
     let synced = holdings.len() as i64;
 
     // Write to DB (lock → write → release)
     {
         let mut conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
-
-        conn.execute(
-            "INSERT OR IGNORE INTO accounts
-                 (name, type, provider, is_active, created_at, updated_at)
-             VALUES ('Upstox', 'broker', 'upstox', 1, datetime('now'), datetime('now'))",
-            [],
-        )?;
-
-        let account_id: i64 = conn.query_row(
-            "SELECT id FROM accounts WHERE provider='upstox'",
-            [],
-            |r| r.get(0),
-        )?;
-
-        let tx = conn.transaction()?;
-        tx.execute("DELETE FROM equity_holdings WHERE account_id=?1", [account_id])?;
-
-        let price_ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
-        for h in &holdings {
-            tx.execute(
-                "INSERT INTO equity_holdings
-                     (account_id, isin, symbol, exchange, name,
-                      quantity, avg_buy_price, current_price, price_updated_at,
-                      created_at, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,datetime('now'),datetime('now'))",
-                rusqlite::params![
-                    account_id,
-                    h.isin,
-                    h.tradingsymbol,
-                    h.exchange,
-                    h.company_name.as_deref().unwrap_or(&h.tradingsymbol),
-                    h.quantity,
-                    h.average_price,
-                    h.last_price,
-                    price_ts,
-                ],
-            )?;
-        }
-
-        tx.commit()?;
+        broker::write_broker_holdings(&mut conn, "upstox", "Upstox", &holdings)?;
     }
 
     Ok(SyncResult { synced, errors: vec![] })
@@ -705,53 +618,14 @@ pub async fn sync_angel_holdings(state: State<'_, DbState>) -> Result<SyncResult
     };
 
     // Fetch holdings (no lock held during HTTP)
-    let holdings = angel_one::fetch_holdings(&api_key, &jwt_token).await?;
+    let raw = angel_one::fetch_holdings(&api_key, &jwt_token).await?;
+    let holdings: Vec<broker::BrokerHolding> = raw.into_iter().map(Into::into).collect();
     let synced = holdings.len() as i64;
 
     // Write to DB (lock → write → release)
     {
         let mut conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
-
-        conn.execute(
-            "INSERT OR IGNORE INTO accounts
-                 (name, type, provider, is_active, created_at, updated_at)
-             VALUES ('Angel One', 'broker', 'angel_one', 1, datetime('now'), datetime('now'))",
-            [],
-        )?;
-
-        let account_id: i64 = conn.query_row(
-            "SELECT id FROM accounts WHERE provider='angel_one'",
-            [],
-            |r| r.get(0),
-        )?;
-
-        let tx = conn.transaction()?;
-        tx.execute("DELETE FROM equity_holdings WHERE account_id=?1", [account_id])?;
-
-        let price_ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-
-        for h in &holdings {
-            tx.execute(
-                "INSERT INTO equity_holdings
-                     (account_id, isin, symbol, exchange, name,
-                      quantity, avg_buy_price, current_price, price_updated_at,
-                      created_at, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,datetime('now'),datetime('now'))",
-                rusqlite::params![
-                    account_id,
-                    h.isin,
-                    h.tradingsymbol,
-                    h.exchange,
-                    h.tradingsymbol,
-                    h.quantity,
-                    h.average_price,
-                    h.ltp,
-                    price_ts,
-                ],
-            )?;
-        }
-
-        tx.commit()?;
+        broker::write_broker_holdings(&mut conn, "angel_one", "Angel One", &holdings)?;
     }
 
     Ok(SyncResult { synced, errors: vec![] })

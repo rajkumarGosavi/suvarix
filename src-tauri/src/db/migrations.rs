@@ -13,6 +13,8 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_009).map_err(|e| AppError::Database(e.to_string()))?;
     // MIGRATION_010 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
     let _ = conn.execute_batch(MIGRATION_010);
+    // MIGRATION_011 uses IF NOT EXISTS throughout — safe to re-run
+    conn.execute_batch(MIGRATION_011).map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
 }
 
@@ -389,4 +391,27 @@ CREATE TABLE IF NOT EXISTS bond_holdings (
 // ALTER TABLE is not idempotent — this migration is run with error ignored in run_migrations
 const MIGRATION_010: &str = "
 ALTER TABLE goals ADD COLUMN achieved_at TEXT;
+";
+
+const MIGRATION_011: &str = "
+CREATE INDEX IF NOT EXISTS idx_recurring_txn_due
+    ON recurring_transactions(next_due_date, is_active);
+
+CREATE INDEX IF NOT EXISTS idx_bills_due
+    ON bills(next_due_date, is_active);
+
+CREATE INDEX IF NOT EXISTS idx_accounts_type
+    ON accounts(type);
+
+CREATE INDEX IF NOT EXISTS idx_equity_account
+    ON equity_holdings(account_id);
+
+CREATE INDEX IF NOT EXISTS idx_mf_account
+    ON mf_holdings(account_id);
+
+CREATE INDEX IF NOT EXISTS idx_txn_account_date
+    ON transactions(account_id, date);
+
+CREATE INDEX IF NOT EXISTS idx_sip_active
+    ON sip_schedules(is_active, account_id);
 ";
