@@ -14,6 +14,9 @@ const upstox = useUpstoxStore();
 const angelOne = useAngelOneStore();
 const { track } = useAnalytics();
 
+// Zerodha & Upstox use localhost TCP OAuth — not possible on Android
+const isAndroid = /android/i.test(navigator.userAgent);
+
 // ── Zerodha inputs ──────────────────────────────────────────────
 const apiKeyInput = ref("");
 const apiSecretInput = ref("");
@@ -270,231 +273,270 @@ function formatTime(iso: string | null): string {
         <h1 class="page-title">Data Sources</h1>
 
         <!-- Zerodha Kite -->
-        <div class="section-header section-header--first">
-            <h2>Zerodha Kite</h2>
-            <Tag v-if="zerodha.status?.isConnected" value="Connected" severity="success" />
-            <Tag v-else-if="zerodha.status?.hasConfig" value="Token Expired" severity="warn" />
-        </div>
-
-        <div class="zerodha-card">
-            <!-- Waiting for browser login -->
-            <div v-if="zerodha.connectLoading" class="zerodha-connecting">
-                <ProgressSpinner style="width:1.75rem;height:1.75rem" />
-                <span>Waiting for browser login… You have up to 3 minutes.</span>
+        <template v-if="!isAndroid">
+            <div class="section-header section-header--first">
+                <h2>Zerodha Kite</h2>
+                <Tag v-if="zerodha.status?.isConnected" value="Connected" severity="success" />
+                <Tag v-else-if="zerodha.status?.hasConfig" value="Token Expired" severity="warn" />
             </div>
 
-            <!-- Setup: no credentials saved yet -->
-            <template v-else-if="!zerodha.status?.hasConfig">
-                <ol class="setup-instructions">
-                    <li>
-                        Go to <strong>kite.zerodha.com/developers</strong> and log in with
-                        your Zerodha account
-                    </li>
-                    <li>Create a new Kite Connect app <em>(free for personal use)</em></li>
-                    <li>
-                        Set the redirect URL to:
-                        <code class="redirect-url">http://127.0.0.1:7459</code>
-                    </li>
-                    <li>Copy the API Key and API Secret into the fields below</li>
-                </ol>
-                <div class="setup-form">
-                    <div class="field">
-                        <label>API Key</label>
-                        <InputText
-                            v-model="apiKeyInput"
-                            placeholder="Your Kite API Key"
-                            fluid
-                        />
-                    </div>
-                    <div class="field">
-                        <label>API Secret</label>
-                        <Password
-                            v-model="apiSecretInput"
-                            :feedback="false"
-                            toggleMask
-                            fluid
-                            placeholder="Your Kite API Secret"
-                        />
-                    </div>
-                    <Message v-if="zerodha.error" severity="error">{{ zerodha.error }}</Message>
-                    <Button
-                        label="Save & Connect"
-                        icon="pi pi-sign-in"
-                        :disabled="!apiKeyInput.trim() || !apiSecretInput.trim()"
-                        @click="saveAndConnect"
-                    />
+            <div class="zerodha-card">
+                <!-- Waiting for browser login -->
+                <div v-if="zerodha.connectLoading" class="zerodha-connecting">
+                    <ProgressSpinner style="width:1.75rem;height:1.75rem" />
+                    <span>Waiting for browser login… You have up to 3 minutes.</span>
                 </div>
-            </template>
 
-            <!-- Reconnect: credentials saved but access token expired -->
-            <template v-else-if="!zerodha.status?.isConnected">
-                <div class="reconnect-row">
-                    <div class="reconnect-info">
-                        <span class="reconnect-title">Access token expired</span>
-                        <span class="reconnect-desc">
-                            Zerodha access tokens expire daily at midnight IST. Reconnect
-                            to continue syncing.
-                        </span>
-                        <span v-if="zerodha.status?.tokenDate" class="token-date text-muted">
-                            Last connected: {{ zerodha.status.tokenDate }}
-                        </span>
-                    </div>
-                    <div class="reconnect-btns">
+                <!-- Setup: no credentials saved yet -->
+                <template v-else-if="!zerodha.status?.hasConfig">
+                    <ol class="setup-instructions">
+                        <li>
+                            Go to <strong>kite.zerodha.com/developers</strong> and log in with
+                            your Zerodha account
+                        </li>
+                        <li>Create a new Kite Connect app <em>(free for personal use)</em></li>
+                        <li>
+                            Set the redirect URL to:
+                            <code class="redirect-url">http://127.0.0.1:7459</code>
+                        </li>
+                        <li>Copy the API Key and API Secret into the fields below</li>
+                    </ol>
+                    <div class="setup-form">
+                        <div class="field">
+                            <label>API Key</label>
+                            <InputText
+                                v-model="apiKeyInput"
+                                placeholder="Your Kite API Key"
+                                fluid
+                            />
+                        </div>
+                        <div class="field">
+                            <label>API Secret</label>
+                            <Password
+                                v-model="apiSecretInput"
+                                :feedback="false"
+                                toggleMask
+                                fluid
+                                placeholder="Your Kite API Secret"
+                            />
+                        </div>
+                        <Message v-if="zerodha.error" severity="error">{{ zerodha.error }}</Message>
                         <Button
-                            label="Reconnect"
+                            label="Save & Connect"
                             icon="pi pi-sign-in"
-                            @click="zerodha.connect()"
-                        />
-                        <Button
-                            label="Remove credentials"
-                            text
-                            size="small"
-                            @click="zerodha.disconnect()"
+                            :disabled="!apiKeyInput.trim() || !apiSecretInput.trim()"
+                            @click="saveAndConnect"
                         />
                     </div>
-                </div>
-                <Message v-if="zerodha.error" severity="error" class="mt-msg">
-                    {{ zerodha.error }}
-                </Message>
-            </template>
+                </template>
 
-            <!-- Connected: ready to sync -->
-            <template v-else>
-                <div class="sync-row">
-                    <div class="sync-info">
-                        <span class="sync-title">Zerodha connected</span>
-                        <span class="sync-desc text-muted">
-                            Sync to import your latest holdings into the Portfolio tab.
-                            Prices refresh automatically via Yahoo Finance.
-                        </span>
-                        <span v-if="zerodha.syncResult" class="sync-result text-muted">
-                            Last sync: {{ zerodha.syncResult.synced }} holding{{
-                                zerodha.syncResult.synced !== 1 ? "s" : ""
-                            }} imported
-                        </span>
+                <!-- Reconnect: credentials saved but access token expired -->
+                <template v-else-if="!zerodha.status?.isConnected">
+                    <div class="reconnect-row">
+                        <div class="reconnect-info">
+                            <span class="reconnect-title">Access token expired</span>
+                            <span class="reconnect-desc">
+                                Zerodha access tokens expire daily at midnight IST. Reconnect
+                                to continue syncing.
+                            </span>
+                            <span v-if="zerodha.status?.tokenDate" class="token-date text-muted">
+                                Last connected: {{ zerodha.status.tokenDate }}
+                            </span>
+                        </div>
+                        <div class="reconnect-btns">
+                            <Button
+                                label="Reconnect"
+                                icon="pi pi-sign-in"
+                                @click="zerodha.connect()"
+                            />
+                            <Button
+                                label="Remove credentials"
+                                text
+                                size="small"
+                                @click="zerodha.disconnect()"
+                            />
+                        </div>
                     </div>
-                    <div class="sync-btns">
-                        <Button
-                            label="Sync Holdings"
-                            icon="pi pi-refresh"
-                            :loading="zerodha.syncLoading"
-                            @click="zerodha.syncHoldings()"
-                        />
-                        <Button
-                            label="Disconnect"
-                            text
-                            size="small"
-                            @click="zerodha.disconnect()"
-                        />
+                    <Message v-if="zerodha.error" severity="error" class="mt-msg">
+                        {{ zerodha.error }}
+                    </Message>
+                </template>
+
+                <!-- Connected: ready to sync -->
+                <template v-else>
+                    <div class="sync-row">
+                        <div class="sync-info">
+                            <span class="sync-title">Zerodha connected</span>
+                            <span class="sync-desc text-muted">
+                                Sync to import your latest holdings into the Portfolio tab.
+                                Prices refresh automatically via Yahoo Finance.
+                            </span>
+                            <span v-if="zerodha.syncResult" class="sync-result text-muted">
+                                Last sync: {{ zerodha.syncResult.synced }} holding{{
+                                    zerodha.syncResult.synced !== 1 ? "s" : ""
+                                }} imported
+                            </span>
+                        </div>
+                        <div class="sync-btns">
+                            <Button
+                                label="Sync Holdings"
+                                icon="pi pi-refresh"
+                                :loading="zerodha.syncLoading"
+                                @click="zerodha.syncHoldings()"
+                            />
+                            <Button
+                                label="Disconnect"
+                                text
+                                size="small"
+                                @click="zerodha.disconnect()"
+                            />
+                        </div>
                     </div>
+                    <Message v-if="zerodha.error" severity="error" class="mt-msg">
+                        {{ zerodha.error }}
+                    </Message>
+                    <ul v-if="zerodha.syncResult?.errors?.length" class="sync-errors">
+                        <li v-for="err in zerodha.syncResult.errors" :key="err">{{ err }}</li>
+                    </ul>
+                </template>
+            </div>
+        </template>
+        <template v-else>
+            <div class="section-header section-header--first">
+                <h2>Zerodha Kite</h2>
+                <Tag value="Desktop Only" severity="secondary" />
+            </div>
+            <div class="zerodha-card desktop-only-notice">
+                <i class="pi pi-desktop desktop-only-icon" />
+                <div class="desktop-only-text">
+                    <span class="reconnect-title">Connect on Desktop</span>
+                    <span class="reconnect-desc">
+                        Zerodha OAuth uses a browser redirect to <code>localhost</code>, which
+                        is not available on Android. Connect on your desktop app, then use
+                        <strong>Settings → Export Sync Backup</strong> to transfer holdings
+                        to this device.
+                    </span>
                 </div>
-                <Message v-if="zerodha.error" severity="error" class="mt-msg">
-                    {{ zerodha.error }}
-                </Message>
-                <ul v-if="zerodha.syncResult?.errors?.length" class="sync-errors">
-                    <li v-for="err in zerodha.syncResult.errors" :key="err">{{ err }}</li>
-                </ul>
-            </template>
-        </div>
+            </div>
+        </template>
 
         <!-- ═══════════════════════════════════════════ Upstox ══ -->
-        <div class="section-header">
-            <h2>Upstox</h2>
-            <Tag v-if="upstox.status?.isConnected" value="Connected" severity="success" />
-            <Tag v-else-if="upstox.status?.hasConfig" value="Token Expired" severity="warn" />
-        </div>
-
-        <div class="zerodha-card">
-            <!-- Waiting for browser login -->
-            <div v-if="upstox.connectLoading" class="zerodha-connecting">
-                <ProgressSpinner style="width:1.75rem;height:1.75rem" />
-                <span>Waiting for browser login… You have up to 3 minutes.</span>
+        <template v-if="!isAndroid">
+            <div class="section-header">
+                <h2>Upstox</h2>
+                <Tag v-if="upstox.status?.isConnected" value="Connected" severity="success" />
+                <Tag v-else-if="upstox.status?.hasConfig" value="Token Expired" severity="warn" />
             </div>
 
-            <!-- Setup: no credentials saved yet -->
-            <template v-else-if="!upstox.status?.hasConfig">
-                <ol class="setup-instructions">
-                    <li>
-                        Go to <strong>developer.upstox.com</strong> → My Apps → Create App
-                    </li>
-                    <li>
-                        Set the redirect URL to:
-                        <code class="redirect-url">http://127.0.0.1:7460</code>
-                    </li>
-                    <li>Copy the API Key and API Secret into the fields below</li>
-                </ol>
-                <div class="setup-form">
-                    <div class="field">
-                        <label>API Key</label>
-                        <InputText v-model="upstoxApiKey" placeholder="Your Upstox API Key" fluid />
-                    </div>
-                    <div class="field">
-                        <label>API Secret</label>
-                        <Password
-                            v-model="upstoxApiSecret"
-                            :feedback="false"
-                            toggleMask
-                            fluid
-                            placeholder="Your Upstox API Secret"
-                        />
-                    </div>
-                    <Message v-if="upstox.error" severity="error">{{ upstox.error }}</Message>
-                    <Button
-                        label="Save & Connect"
-                        icon="pi pi-sign-in"
-                        :disabled="!upstoxApiKey.trim() || !upstoxApiSecret.trim()"
-                        @click="saveAndConnectUpstox"
-                    />
+            <div class="zerodha-card">
+                <!-- Waiting for browser login -->
+                <div v-if="upstox.connectLoading" class="zerodha-connecting">
+                    <ProgressSpinner style="width:1.75rem;height:1.75rem" />
+                    <span>Waiting for browser login… You have up to 3 minutes.</span>
                 </div>
-            </template>
 
-            <!-- Reconnect: credentials saved but token expired -->
-            <template v-else-if="!upstox.status?.isConnected">
-                <div class="reconnect-row">
-                    <div class="reconnect-info">
-                        <span class="reconnect-title">Access token expired</span>
-                        <span class="reconnect-desc">
-                            Upstox access tokens expire daily. Reconnect to continue syncing.
-                        </span>
-                        <span v-if="upstox.status?.tokenDate" class="token-date text-muted">
-                            Last connected: {{ upstox.status.tokenDate }}
-                        </span>
-                    </div>
-                    <div class="reconnect-btns">
-                        <Button label="Reconnect" icon="pi pi-sign-in" @click="upstox.connect()" />
-                        <Button label="Remove credentials" text size="small" @click="upstox.disconnect()" />
-                    </div>
-                </div>
-                <Message v-if="upstox.error" severity="error" class="mt-msg">{{ upstox.error }}</Message>
-            </template>
-
-            <!-- Connected -->
-            <template v-else>
-                <div class="sync-row">
-                    <div class="sync-info">
-                        <span class="sync-title">Upstox connected</span>
-                        <span class="sync-desc text-muted">
-                            Sync to import your latest holdings into the Portfolio tab.
-                        </span>
-                        <span v-if="upstox.syncResult" class="sync-result text-muted">
-                            Last sync: {{ upstox.syncResult.synced }} holding{{
-                                upstox.syncResult.synced !== 1 ? "s" : ""
-                            }} imported
-                        </span>
-                    </div>
-                    <div class="sync-btns">
+                <!-- Setup: no credentials saved yet -->
+                <template v-else-if="!upstox.status?.hasConfig">
+                    <ol class="setup-instructions">
+                        <li>
+                            Go to <strong>developer.upstox.com</strong> → My Apps → Create App
+                        </li>
+                        <li>
+                            Set the redirect URL to:
+                            <code class="redirect-url">http://127.0.0.1:7460</code>
+                        </li>
+                        <li>Copy the API Key and API Secret into the fields below</li>
+                    </ol>
+                    <div class="setup-form">
+                        <div class="field">
+                            <label>API Key</label>
+                            <InputText v-model="upstoxApiKey" placeholder="Your Upstox API Key" fluid />
+                        </div>
+                        <div class="field">
+                            <label>API Secret</label>
+                            <Password
+                                v-model="upstoxApiSecret"
+                                :feedback="false"
+                                toggleMask
+                                fluid
+                                placeholder="Your Upstox API Secret"
+                            />
+                        </div>
+                        <Message v-if="upstox.error" severity="error">{{ upstox.error }}</Message>
                         <Button
-                            label="Sync Holdings"
-                            icon="pi pi-refresh"
-                            :loading="upstox.syncLoading"
-                            @click="upstox.syncHoldings()"
+                            label="Save & Connect"
+                            icon="pi pi-sign-in"
+                            :disabled="!upstoxApiKey.trim() || !upstoxApiSecret.trim()"
+                            @click="saveAndConnectUpstox"
                         />
-                        <Button label="Disconnect" text size="small" @click="upstox.disconnect()" />
                     </div>
+                </template>
+
+                <!-- Reconnect: credentials saved but token expired -->
+                <template v-else-if="!upstox.status?.isConnected">
+                    <div class="reconnect-row">
+                        <div class="reconnect-info">
+                            <span class="reconnect-title">Access token expired</span>
+                            <span class="reconnect-desc">
+                                Upstox access tokens expire daily. Reconnect to continue syncing.
+                            </span>
+                            <span v-if="upstox.status?.tokenDate" class="token-date text-muted">
+                                Last connected: {{ upstox.status.tokenDate }}
+                            </span>
+                        </div>
+                        <div class="reconnect-btns">
+                            <Button label="Reconnect" icon="pi pi-sign-in" @click="upstox.connect()" />
+                            <Button label="Remove credentials" text size="small" @click="upstox.disconnect()" />
+                        </div>
+                    </div>
+                    <Message v-if="upstox.error" severity="error" class="mt-msg">{{ upstox.error }}</Message>
+                </template>
+
+                <!-- Connected -->
+                <template v-else>
+                    <div class="sync-row">
+                        <div class="sync-info">
+                            <span class="sync-title">Upstox connected</span>
+                            <span class="sync-desc text-muted">
+                                Sync to import your latest holdings into the Portfolio tab.
+                            </span>
+                            <span v-if="upstox.syncResult" class="sync-result text-muted">
+                                Last sync: {{ upstox.syncResult.synced }} holding{{
+                                    upstox.syncResult.synced !== 1 ? "s" : ""
+                                }} imported
+                            </span>
+                        </div>
+                        <div class="sync-btns">
+                            <Button
+                                label="Sync Holdings"
+                                icon="pi pi-refresh"
+                                :loading="upstox.syncLoading"
+                                @click="upstox.syncHoldings()"
+                            />
+                            <Button label="Disconnect" text size="small" @click="upstox.disconnect()" />
+                        </div>
+                    </div>
+                    <Message v-if="upstox.error" severity="error" class="mt-msg">{{ upstox.error }}</Message>
+                </template>
+            </div>
+        </template>
+        <template v-else>
+            <div class="section-header">
+                <h2>Upstox</h2>
+                <Tag value="Desktop Only" severity="secondary" />
+            </div>
+            <div class="zerodha-card desktop-only-notice">
+                <i class="pi pi-desktop desktop-only-icon" />
+                <div class="desktop-only-text">
+                    <span class="reconnect-title">Connect on Desktop</span>
+                    <span class="reconnect-desc">
+                        Upstox OAuth uses a browser redirect to <code>localhost</code>, which
+                        is not available on Android. Connect on your desktop app, then sync
+                        holdings via <strong>Settings → Export Sync Backup</strong>.
+                    </span>
                 </div>
-                <Message v-if="upstox.error" severity="error" class="mt-msg">{{ upstox.error }}</Message>
-            </template>
-        </div>
+            </div>
+        </template>
 
         <!-- ══════════════════════════════════════════ Angel One ══ -->
         <div class="section-header">
@@ -1149,6 +1191,18 @@ function formatTime(iso: string | null): string {
     color: var(--p-red-400, #f87171);
 }
 .sync-errors li { margin-bottom: 0.2rem; }
+
+/* Android desktop-only notice */
+.desktop-only-notice {
+    display: flex; align-items: flex-start; gap: 1rem;
+    opacity: 0.85;
+}
+.desktop-only-icon {
+    font-size: 1.6rem; color: var(--p-text-muted-color); flex-shrink: 0; margin-top: 0.1rem;
+}
+.desktop-only-text {
+    display: flex; flex-direction: column; gap: 0.35rem;
+}
 
 @media (max-width: 700px) {
     .import-grid { grid-template-columns: 1fr; }
