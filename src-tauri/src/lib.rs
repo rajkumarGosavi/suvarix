@@ -13,6 +13,7 @@ pub mod reports;
 pub mod settings;
 pub mod transactions;
 pub mod analytics;
+pub mod backup;
 pub mod data_sources;
 pub mod goals;
 pub mod reminders;
@@ -131,6 +132,9 @@ pub fn run() {
             settings::commands::set_setting,
             settings::commands::backup_database,
             settings::commands::restore_database,
+            // backup / sync
+            backup::commands::export_sync_backup,
+            backup::commands::import_sync_backup,
             settings::commands::wipe_all_data,
             settings::commands::get_app_data_dir,
             settings::commands::write_csv,
