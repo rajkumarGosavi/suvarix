@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from "vue";
+import { ref, onMounted, onUnmounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
 import { useUiStore } from "@/stores/ui";
@@ -104,20 +104,43 @@ const navItems = [
 ];
 
 const isActive = (path: string) => route.path === path || route.path.startsWith(path + "/");
+
+const drawerOpen = ref(false);
+watch(route, () => { drawerOpen.value = false; });
 </script>
 
 <template>
     <div class="app-shell">
-        <nav class="sidebar" :class="{ collapsed: ui.sidebarCollapsed }">
+        <!-- Mobile top bar (hidden on desktop) -->
+        <header class="mobile-topbar">
+            <Button icon="pi pi-bars" text size="small" @click="drawerOpen = true" aria-label="Open menu" />
+            <span class="brand-name logo-brand">FinFolio</span>
+            <Button icon="pi pi-lock" text size="small" @click="lock" aria-label="Lock app" class="ml-auto" />
+        </header>
+
+        <!-- Drawer backdrop (mobile only) -->
+        <div v-if="drawerOpen" class="drawer-backdrop" @click="drawerOpen = false" />
+
+        <nav class="sidebar" :class="{ collapsed: ui.sidebarCollapsed, 'drawer-open': drawerOpen }">
             <div class="sidebar-brand">
                 <span v-if="!ui.sidebarCollapsed" class="brand-name logo-brand">FinFolio</span>
+                <!-- Desktop: collapse toggle -->
                 <Button
                     :icon="ui.sidebarCollapsed ? 'pi pi-bars' : 'pi pi-times'"
                     text
                     size="small"
                     @click="ui.toggleSidebar()"
-                    class="toggle-btn"
+                    class="toggle-btn desktop-only"
                     aria-label="Toggle sidebar"
+                />
+                <!-- Mobile: close drawer -->
+                <Button
+                    icon="pi pi-times"
+                    text
+                    size="small"
+                    @click="drawerOpen = false"
+                    class="toggle-btn mobile-close-btn"
+                    aria-label="Close menu"
                 />
             </div>
 
@@ -239,5 +262,83 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
     flex: 1;
     overflow-y: auto;
     padding: 1.75rem 2rem;
+}
+
+/* ── Mobile (≤639px): drawer navigation ───────────────────── */
+
+.mobile-topbar {
+    display: none;
+}
+
+.drawer-backdrop {
+    display: none;
+}
+
+/* Mobile close btn hidden on desktop; desktop toggle hidden on mobile */
+.mobile-close-btn {
+    display: none;
+}
+
+@media (max-width: 639px) {
+    .app-shell {
+        flex-direction: column;
+    }
+
+    .mobile-topbar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0 0.75rem;
+        height: 52px;
+        flex-shrink: 0;
+        background: var(--p-surface-card);
+        border-bottom: 1px solid var(--p-content-border-color);
+        position: sticky;
+        top: 0;
+        z-index: 50;
+    }
+
+    .ml-auto {
+        margin-left: auto;
+    }
+
+    .drawer-backdrop {
+        display: block;
+        position: fixed;
+        top: 52px;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 199;
+    }
+
+    .sidebar {
+        position: fixed;
+        top: 52px;
+        left: -240px;
+        height: calc(100% - 52px);
+        width: 240px !important;
+        min-width: 240px !important;
+        z-index: 200;
+        transition: left 0.25s ease;
+    }
+
+    .sidebar.drawer-open {
+        left: 0;
+    }
+
+    /* Swap toggle buttons: hide desktop collapse, show mobile close */
+    .desktop-only {
+        display: none;
+    }
+
+    .mobile-close-btn {
+        display: flex;
+    }
+
+    .main-content {
+        padding: 1rem 0.875rem;
+    }
 }
 </style>

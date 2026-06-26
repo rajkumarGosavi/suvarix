@@ -192,4 +192,26 @@ const chartOptions = computed(() => ({
     padding: 3rem;
     text-align: center;
 }
+
+@media (max-width: 639px) {
+    .net-worth-card {
+        padding: 1rem;
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .nw-value {
+        font-size: 1.75rem;
+    }
+
+    .nw-breakdown {
+        flex-direction: column;
+        gap: 0.75rem;
+        width: 100%;
+    }
+
+    .chart-wrap {
+        height: 200px;
+    }
+}
 </style>

@@ -483,4 +483,8 @@ label { font-size: 0.85rem; font-weight: 500; }
 .amort-stat-value { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .amort-table { font-size: 0.85rem; }
 .amort-empty { text-align: center; padding: 2rem; }
+
+@media (max-width: 639px) {
+    .field-row { flex-direction: column; }
+}
 </style>

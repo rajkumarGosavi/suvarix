@@ -69,4 +69,10 @@ const tabs = [
 .stat-label { font-size: 0.75rem; }
 .stat-value { font-size: 1.1rem; font-weight: 700; }
 .loading { display: flex; justify-content: center; padding: 4rem; }
+
+@media (max-width: 639px) {
+    .page-header { flex-direction: column; align-items: flex-start; }
+    .header-stats { flex-wrap: wrap; gap: 1rem; }
+    .stat-value { font-size: 1rem; }
+}
 </style>

@@ -60,6 +60,8 @@ async function unlock() {
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 1rem;
+    overflow: hidden;
 }
 
 .unlock-card {

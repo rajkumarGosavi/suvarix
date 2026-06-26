@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { ref, onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { useUiStore } from "@/stores/ui";
 
 const ui = useUiStore();
-onMounted(() => ui.initTheme());
+const router = useRouter();
+const ready = ref(false);
+
+onMounted(() => {
+    ui.initTheme();
+    router.isReady().then(() => { ready.value = true; });
+});
 </script>
 
 <template>
-  <RouterView />
+  <RouterView v-if="ready" />
 </template>

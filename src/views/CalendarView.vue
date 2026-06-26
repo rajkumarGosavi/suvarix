@@ -474,4 +474,12 @@ onMounted(loadEvents);
 @media (max-width: 860px) {
     .calendar-layout { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 639px) {
+    .day-cell { min-height: 52px; padding: 0.25rem; }
+    .day-num { font-size: 0.72rem; width: 22px; height: 22px; }
+    .month-label { font-size: 1rem; min-width: 140px; }
+    .legend { gap: 0.6rem; }
+    .legend-label { font-size: 0.7rem; }
+}
 </style>

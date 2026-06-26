@@ -554,4 +554,10 @@ onMounted(() => {
     gap: 0.5rem;
     margin-top: 0.25rem;
 }
+
+@media (max-width: 639px) {
+    .goals-view { padding: 1rem 0.875rem; }
+    .goals-grid { grid-template-columns: 1fr; }
+    .field-row { flex-direction: column; }
+}
 </style>

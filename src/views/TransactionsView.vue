@@ -228,4 +228,10 @@ onMounted(() => store.fetch({ limit: 100 }));
 .field-row { display: flex; gap: 1rem; }
 label { font-size: 0.85rem; font-weight: 500; }
 .dialog-footer { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
+
+@media (max-width: 639px) {
+    .filter-bar { flex-direction: column; align-items: stretch; }
+    .filter-input { min-width: unset; }
+    .field-row { flex-direction: column; }
+}
 </style>

@@ -63,3 +63,26 @@ body {
     color: var(--p-text-muted-color);
     opacity: 0.5;
 }
+
+/* ─── Mobile overrides (≤639px) ────────────────────────────── */
+@media (max-width: 639px) {
+    /* Dialogs: prevent overflow on small screens */
+    .p-dialog {
+        width: 95vw !important;
+        max-width: 95vw !important;
+    }
+
+    /* DataTables: horizontal scroll on narrow screens */
+    .p-datatable {
+        overflow-x: auto;
+    }
+    .p-datatable-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Page title size */
+    .page-title {
+        font-size: 1.2rem !important;
+    }
+}

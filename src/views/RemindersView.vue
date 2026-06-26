@@ -744,4 +744,9 @@ onMounted(async () => {
 .milestone-label { font-weight: 600; font-size: 0.875rem; }
 .milestone-date { font-size: 0.775rem; color: var(--p-text-muted-color); margin-top: 0.1rem; }
 .milestone-amount { font-size: 0.8rem; color: var(--p-text-muted-color); margin-top: 0.1rem; }
+
+@media (max-width: 639px) {
+    .field-row { flex-direction: column; }
+    .tab-pane-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+}
 </style>
