@@ -1,0 +1,103 @@
+name: Release Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.2.0) — must exist in the repo"
+        required: true
+        type: string
+      draft:
+        description: "Publish as draft release"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            rust-targets: ""
+            tauri-args: ""
+
+          - platform: macos-latest
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+            tauri-args: "--target universal-apple-darwin"
+
+          - platform: ubuntu-22.04
+            rust-targets: ""
+            tauri-args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Rust build cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Build and upload to GitHub release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ inputs.tag }}
+          releaseName: "FinFolio ${{ inputs.tag }}"
+          releaseBody: |
+            ## FinFolio ${{ inputs.tag }}
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | Windows  | `.msi` installer |
+            | macOS    | `.dmg` (universal — Intel + Apple Silicon) |
+            | Linux    | `.AppImage` / `.deb` |
+
+            ### What's New
+            See [CHANGELOG](https://github.com/${{ github.repository }}/commits/${{ inputs.tag }}) for full commit history.
+          releaseDraft: ${{ inputs.draft == 'true' }}
+          prerelease: false
+          args: ${{ matrix.tauri-args }}
