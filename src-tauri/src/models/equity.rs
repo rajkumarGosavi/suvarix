@@ -13,6 +13,7 @@ pub struct EquityHolding {
     pub avg_buy_price: f64,
     pub current_price: Option<f64>,
     pub price_updated_at: Option<String>,
+    pub broker_name: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

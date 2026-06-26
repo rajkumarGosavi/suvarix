@@ -25,15 +25,20 @@ pub fn get_allocation_breakdown(state: State<DbState>) -> Result<Vec<AllocationI
 pub fn list_equity(state: State<DbState>) -> Result<Vec<EquityHolding>> {
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     let mut stmt = conn.prepare(
-        "SELECT id, account_id, isin, symbol, exchange, name, quantity, avg_buy_price,
-                current_price, price_updated_at, created_at, updated_at
-         FROM equity_holdings ORDER BY name"
+        "SELECT e.id, e.account_id, e.isin, e.symbol, e.exchange, e.name, e.quantity,
+                e.avg_buy_price, e.current_price, e.price_updated_at,
+                a.name AS broker_name,
+                e.created_at, e.updated_at
+         FROM equity_holdings e
+         LEFT JOIN accounts a ON a.id = e.account_id
+         ORDER BY e.name"
     )?;
     let rows = stmt.query_map([], |r| Ok(EquityHolding {
         id: r.get(0)?, account_id: r.get(1)?, isin: r.get(2)?, symbol: r.get(3)?,
         exchange: r.get(4)?, name: r.get(5)?, quantity: r.get(6)?, avg_buy_price: r.get(7)?,
         current_price: r.get(8)?, price_updated_at: r.get(9)?,
-        created_at: r.get(10)?, updated_at: r.get(11)?,
+        broker_name: r.get(10)?,
+        created_at: r.get(11)?, updated_at: r.get(12)?,
     }))?;
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
