@@ -203,6 +203,72 @@ function clearDiag() {
     });
 }
 
+// ─── Sync backup ─────────────────────────────────────────────
+const syncPwVisible = ref(false);
+const syncPassword = ref("");
+const syncMode = ref<"export" | "import">("export");
+const syncPath = ref("");
+const syncLoading = ref(false);
+
+async function startSyncExport() {
+    const dest = await save({
+        defaultPath: `finfolio-sync-${new Date().toISOString().slice(0, 10)}.ffbak`,
+        filters: [{ name: "FinFolio Sync Backup", extensions: ["ffbak"] }],
+    });
+    if (!dest) return;
+    syncPath.value = dest as string;
+    syncMode.value = "export";
+    syncPassword.value = "";
+    syncPwVisible.value = true;
+}
+
+async function startSyncImport() {
+    confirm.require({
+        message: "This will replace ALL financial data on this device with the backup's data. Your master password is NOT changed. Broker API keys will also be synced.",
+        header: "Import Sync Backup",
+        icon: "pi pi-exclamation-triangle",
+        rejectProps: { label: "Cancel", outlined: true },
+        acceptProps: { label: "Choose File & Import", severity: "danger" },
+        accept: async () => {
+            const src = await open({
+                multiple: false,
+                filters: [{ name: "FinFolio Sync Backup", extensions: ["ffbak"] }],
+            });
+            if (!src) return;
+            syncPath.value = src as string;
+            syncMode.value = "import";
+            syncPassword.value = "";
+            syncPwVisible.value = true;
+        },
+    });
+}
+
+async function confirmSync() {
+    if (!syncPassword.value || syncLoading.value) return;
+    syncPwVisible.value = false;
+    syncLoading.value = true;
+    try {
+        if (syncMode.value === "export") {
+            const r = await invoke<{ rowsExported: number }>(
+                "export_sync_backup",
+                { destPath: syncPath.value, password: syncPassword.value },
+            );
+            toast.add({ severity: "success", summary: "Sync backup exported", detail: `${r.rowsExported} records saved.`, life: 5000 });
+        } else {
+            const r = await invoke<{ rowsImported: number; tablesImported: number }>(
+                "import_sync_backup",
+                { srcPath: syncPath.value, password: syncPassword.value },
+            );
+            toast.add({ severity: "success", summary: "Import complete", detail: `${r.rowsImported} records across ${r.tablesImported} tables restored. Restart the app to refresh all views.`, life: 8000 });
+        }
+    } catch (e: any) {
+        toast.add({ severity: "error", summary: syncMode.value === "export" ? "Export failed" : "Import failed", detail: String(e?.message ?? e), life: 6000 });
+    } finally {
+        syncLoading.value = false;
+        syncPassword.value = "";
+    }
+}
+
 // ─── About ───────────────────────────────────────────────────
 const appDataDir = ref("");
 
@@ -317,6 +383,44 @@ const APP_VERSION = "0.1.0";
                     outlined
                     :loading="restoreLoading"
                     @click="doRestore"
+                />
+            </div>
+
+            <Divider />
+
+            <div class="data-row">
+                <div class="data-row-info">
+                    <span class="data-row-title">Export Sync Backup</span>
+                    <span class="data-row-desc">
+                        Save an encrypted <code>.ffbak</code> file to transfer to another device (USB, WhatsApp, etc.).
+                        Protected by your master password.
+                    </span>
+                </div>
+                <Button
+                    icon="pi pi-file-export"
+                    label="Export"
+                    outlined
+                    :loading="syncLoading && syncMode === 'export'"
+                    @click="startSyncExport"
+                />
+            </div>
+
+            <Divider />
+
+            <div class="data-row">
+                <div class="data-row-info">
+                    <span class="data-row-title">Import Sync Backup</span>
+                    <span class="data-row-desc">
+                        Load a <code>.ffbak</code> backup from another device. Replaces all current data.
+                        Enter the source device's master password when prompted.
+                    </span>
+                </div>
+                <Button
+                    icon="pi pi-file-import"
+                    label="Import"
+                    outlined
+                    :loading="syncLoading && syncMode === 'import'"
+                    @click="startSyncImport"
                 />
             </div>
 
@@ -451,6 +555,38 @@ const APP_VERSION = "0.1.0";
         </div>
     </Dialog>
 
+    <!-- Sync backup password dialog -->
+    <Dialog
+        v-model:visible="syncPwVisible"
+        :header="syncMode === 'export' ? 'Enter Master Password to Encrypt' : 'Enter Source Device Password'"
+        modal
+        style="width: 380px"
+    >
+        <p class="sync-desc">
+            {{ syncMode === 'export'
+                ? 'The backup is encrypted with your master password. You will need this exact password to import it on another device.'
+                : 'Enter the master password of the device that created this backup.' }}
+        </p>
+        <Password
+            v-model="syncPassword"
+            :feedback="false"
+            toggleMask
+            fluid
+            placeholder="Master password"
+            autofocus
+            @keydown.enter="confirmSync"
+        />
+        <div class="dialog-footer">
+            <Button label="Cancel" outlined @click="syncPwVisible = false; syncPassword = ''" />
+            <Button
+                :label="syncMode === 'export' ? 'Encrypt & Save' : 'Decrypt & Import'"
+                :disabled="!syncPassword"
+                :loading="syncLoading"
+                @click="confirmSync"
+            />
+        </div>
+    </Dialog>
+
     <ConfirmDialog />
     <Toast />
 </template>
@@ -515,4 +651,13 @@ label { font-size: 0.875rem; font-weight: 500; }
 /* Wipe dialog */
 .mt-input { margin-top: 0.75rem; }
 .dialog-footer { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.25rem; }
+
+/* Sync dialog */
+.sync-desc { font-size: 0.85rem; color: var(--p-text-muted-color); margin: 0 0 1rem; line-height: 1.5; }
+
+@media (max-width: 639px) {
+    .data-row { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+    .lock-row { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+    .theme-row { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+}
 </style>
