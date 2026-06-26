@@ -8,6 +8,7 @@ export interface Goal {
     targetAmount: number;
     targetDate: string;
     notes: string | null;
+    achievedAt: string | null;
     createdAt: string;
     updatedAt: string;
 }

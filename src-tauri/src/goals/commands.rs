@@ -11,8 +11,18 @@ pub struct Goal {
     pub target_amount: f64,
     pub target_date: String,
     pub notes: Option<String>,
+    pub achieved_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalAchievement {
+    pub id: i64,
+    pub name: String,
+    pub target_amount: f64,
+    pub category: String,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -29,7 +39,7 @@ pub struct GoalPayload {
 pub fn list_goals(state: State<DbState>) -> Result<Vec<Goal>> {
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, category, target_amount, target_date, notes, created_at, updated_at
+        "SELECT id, name, category, target_amount, target_date, notes, achieved_at, created_at, updated_at
          FROM goals ORDER BY target_date ASC",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -40,8 +50,9 @@ pub fn list_goals(state: State<DbState>) -> Result<Vec<Goal>> {
             target_amount: r.get(3)?,
             target_date: r.get(4)?,
             notes: r.get(5)?,
-            created_at: r.get(6)?,
-            updated_at: r.get(7)?,
+            achieved_at: r.get(6)?,
+            created_at: r.get(7)?,
+            updated_at: r.get(8)?,
         })
     })?;
     Ok(rows.filter_map(|r| r.ok()).collect())
@@ -69,7 +80,7 @@ pub fn update_goal(id: i64, payload: GoalPayload, state: State<DbState>) -> Resu
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     conn.execute(
         "UPDATE goals SET name=?1, category=?2, target_amount=?3, target_date=?4,
-         notes=?5, updated_at=datetime('now') WHERE id=?6",
+         notes=?5, achieved_at=NULL, updated_at=datetime('now') WHERE id=?6",
         rusqlite::params![
             payload.name,
             payload.category,
@@ -87,4 +98,31 @@ pub fn delete_goal(id: i64, state: State<DbState>) -> Result<()> {
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     conn.execute("DELETE FROM goals WHERE id=?1", [id])?;
     Ok(())
+}
+
+/// Check total_assets against unachieved goals. Marks newly reached ones and
+/// returns only the newly achieved goals so the caller can notify.
+#[tauri::command]
+pub fn check_goal_achievements(total_assets: f64, state: State<DbState>) -> Result<Vec<GoalAchievement>> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, target_amount, category FROM goals
+         WHERE target_amount <= ?1 AND (achieved_at IS NULL)"
+    )?;
+    let newly: Vec<GoalAchievement> = stmt
+        .query_map([total_assets], |r| Ok(GoalAchievement {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            target_amount: r.get(2)?,
+            category: r.get(3)?,
+        }))?
+        .filter_map(|r| r.ok())
+        .collect();
+    if !newly.is_empty() {
+        conn.execute(
+            "UPDATE goals SET achieved_at = date('now') WHERE target_amount <= ?1 AND achieved_at IS NULL",
+            [total_assets],
+        )?;
+    }
+    Ok(newly)
 }

@@ -11,6 +11,8 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_007).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_008).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_009).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_010 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
+    let _ = conn.execute_batch(MIGRATION_010);
     Ok(())
 }
 
@@ -382,4 +384,9 @@ CREATE TABLE IF NOT EXISTS bond_holdings (
     created_at       TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
+";
+
+// ALTER TABLE is not idempotent — this migration is run with error ignored in run_migrations
+const MIGRATION_010: &str = "
+ALTER TABLE goals ADD COLUMN achieved_at TEXT;
 ";

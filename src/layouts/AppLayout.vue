@@ -8,6 +8,7 @@ import { useAnalytics } from "@/composables/useAnalytics";
 import { useToast } from "primevue/usetoast";
 import { useRemindersStore } from "@/stores/reminders";
 import { useNotifications } from "@/composables/useNotifications";
+import { useGoalCheck } from "@/composables/useGoalCheck";
 
 const ui = useUiStore();
 const auth = useAuthStore();
@@ -17,6 +18,7 @@ const { track } = useAnalytics();
 const toast = useToast();
 const remindersStore = useRemindersStore();
 const { nativeNotify } = useNotifications();
+const { checkGoals } = useGoalCheck();
 
 function lock() {
     auth.lock();
@@ -64,6 +66,10 @@ async function checkReminders() {
         const names = tomorrowBills.map(r => r.name).join(", ");
         toast.add({ severity: "warn", summary: "Bills due tomorrow", detail: names, life: 8000 });
     }
+
+    // Check goal achievements against current net worth
+    const nw = await invoke<{ totalAssets: number }>("get_net_worth").catch(() => null);
+    if (nw) checkGoals(nw.totalAssets);
 }
 
 onMounted(async () => {

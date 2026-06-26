@@ -4,6 +4,7 @@ import { usePortfolioStore } from "@/stores/portfolio";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { useChartColors } from "@/composables/useChartColors";
 import { useMilestoneCheck } from "@/composables/useMilestoneCheck";
+import { useGoalCheck } from "@/composables/useGoalCheck";
 import { Doughnut } from "vue-chartjs";
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from "chart.js";
 
@@ -13,10 +14,14 @@ const portfolio = usePortfolioStore();
 const { formatCompact, formatPercent } = useCurrencyFormat();
 const { textColor, PALETTE } = useChartColors();
 const { checkMilestones } = useMilestoneCheck();
+const { checkGoals } = useGoalCheck();
 
 onMounted(async () => {
     await portfolio.fetchAll();
-    if (portfolio.netWorth) checkMilestones(portfolio.netWorth.netWorth);
+    if (portfolio.netWorth) {
+        checkMilestones(portfolio.netWorth.netWorth);
+        checkGoals(portfolio.netWorth.totalAssets);
+    }
 });
 
 const chartData = computed(() => ({
