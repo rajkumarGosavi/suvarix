@@ -184,7 +184,7 @@ function brokerSeverity(brokerName: string): string {
             </Column>
 
             <!-- Expanded per-broker breakdown -->
-            <template #expansion="{ data }" v-if="false"><!-- placeholder, using custom row below --></template>
+            <template #expansion v-if="false"><!-- placeholder, using custom row below --></template>
         </DataTable>
 
         <!-- Per-broker detail rows inserted after each expanded group -->
@@ -315,4 +315,5 @@ label { font-size: 0.85rem; font-weight: 500; }
 .gain { color: var(--p-green-500); }
 .loss { color: var(--p-red-400); }
 </style>
+
 
