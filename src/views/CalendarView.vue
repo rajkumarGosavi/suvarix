@@ -325,7 +325,9 @@ onMounted(loadEvents);
 }
 .day-cell:nth-child(7n) { border-right: none; }
 .day-cell--blank { cursor: default; background: var(--p-surface-ground); }
-.day-cell:hover:not(.day-cell--blank) { background: var(--p-primary-50); }
+.day-cell:hover:not(.day-cell--blank) {
+    background: color-mix(in srgb, var(--p-primary-color) 12%, transparent);
+}
 
 .day-cell.is-today .day-num {
     background: var(--p-primary-color);
@@ -339,7 +341,7 @@ onMounted(loadEvents);
     font-weight: 700;
 }
 .day-cell.is-selected {
-    background: var(--p-primary-50) !important;
+    background: color-mix(in srgb, var(--p-primary-color) 15%, transparent) !important;
     box-shadow: inset 0 0 0 2px var(--p-primary-color);
 }
 
