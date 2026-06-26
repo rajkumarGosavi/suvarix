@@ -4,6 +4,7 @@ import { usePortfolioStore } from "@/stores/portfolio";
 import EquityPanel from "@/components/portfolio/EquityPanel.vue";
 import MfPanel from "@/components/portfolio/MfPanel.vue";
 import FdPanel from "@/components/portfolio/FdPanel.vue";
+import BondsPanel from "@/components/portfolio/BondsPanel.vue";
 import PpfEpfPanel from "@/components/portfolio/PpfEpfPanel.vue";
 import RealEstatePanel from "@/components/portfolio/RealEstatePanel.vue";
 import GoldPanel from "@/components/portfolio/GoldPanel.vue";
@@ -21,6 +22,7 @@ const tabs = [
     { label: "Equity", component: EquityPanel },
     { label: "Mutual Funds", component: MfPanel },
     { label: "FD/RD", component: FdPanel },
+    { label: "Bonds", component: BondsPanel },
     { label: "PPF/EPF/NPS", component: PpfEpfPanel },
     { label: "Real Estate", component: RealEstatePanel },
     { label: "Gold", component: GoldPanel },

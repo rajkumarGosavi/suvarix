@@ -90,6 +90,7 @@ const navItems = [
     { path: "/transactions",    icon: "pi pi-list",        label: "Transactions" },
     { path: "/liabilities",     icon: "pi pi-credit-card", label: "Liabilities" },
     { path: "/reminders",      icon: "pi pi-bell",        label: "Reminders" },
+    { path: "/calendar",       icon: "pi pi-calendar",    label: "Calendar" },
     { path: "/income-expenses", icon: "pi pi-wallet",      label: "Income & Expenses" },
     { path: "/data-sources",    icon: "pi pi-database",    label: "Data Sources" },
     { path: "/reports",         icon: "pi pi-chart-bar",   label: "Reports" },

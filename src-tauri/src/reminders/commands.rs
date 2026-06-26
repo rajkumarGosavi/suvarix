@@ -521,3 +521,192 @@ pub fn delete_milestone(id: i64, state: State<DbState>) -> Result<()> {
     conn.execute("DELETE FROM milestones WHERE id=?1 AND is_custom=1", [id])?;
     Ok(())
 }
+
+// ── Calendar events ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEvent {
+    pub date: String,        // YYYY-MM-DD
+    pub event_type: String,  // "loan" | "credit_card" | "bill" | "goal" | "recurring"
+    pub source_id: i64,
+    pub name: String,
+    pub amount: f64,
+    pub category: String,
+    pub is_overdue: bool,
+}
+
+fn last_day_of_month_date(year: i32, month: u32) -> NaiveDate {
+    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    NaiveDate::from_ymd_opt(ny, nm, 1).unwrap() - Duration::days(1)
+}
+
+/// Returns all financial events (loans, credit cards, bills, goals, recurring) for the given month.
+#[tauri::command]
+pub fn get_calendar_events(year: i32, month: u32, state: State<DbState>) -> Result<Vec<CalendarEvent>> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    let today = Local::now().date_naive();
+    let first_day = NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| AppError::Database("invalid year/month".into()))?;
+    let last_day = last_day_of_month_date(year, month);
+    let mut events: Vec<CalendarEvent> = Vec::new();
+
+    // ── Loans: emit if next_emi_date falls in [first_day, last_day] ──────────
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, lender_name, loan_type, emi_amount, next_emi_date
+             FROM loans WHERE next_emi_date IS NOT NULL"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+                r.get::<_, f64>(3)?, r.get::<_, String>(4)?))
+        })?;
+        for row in rows.flatten() {
+            let (id, lender, loan_type, emi, due_str) = row;
+            if let Ok(due) = NaiveDate::parse_from_str(&due_str, "%Y-%m-%d") {
+                if due >= first_day && due <= last_day {
+                    events.push(CalendarEvent {
+                        date: due_str,
+                        event_type: "loan".into(),
+                        source_id: id,
+                        name: format!("{} EMI", lender),
+                        amount: emi,
+                        category: loan_type,
+                        is_overdue: due < today,
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Credit Cards: compute due date from day-of-month for this month ───────
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, bank_name, card_name, min_payment, current_balance, due_date
+             FROM credit_cards WHERE due_date IS NOT NULL"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<f64>>(3)?, r.get::<_, f64>(4)?, r.get::<_, Option<i64>>(5)?))
+        })?;
+        for row in rows.flatten() {
+            let (id, bank, card_name, min_pay, balance, due_day_opt) = row;
+            let Some(due_day) = due_day_opt else { continue };
+            if due_day < 1 || due_day > 31 { continue; }
+            let due_day = due_day as u32;
+            let clamped = due_day.min(days_in_month(year, month));
+            if let Some(due) = NaiveDate::from_ymd_opt(year, month, clamped) {
+                let label = card_name.map(|c| format!("{} {}", bank, c)).unwrap_or(bank);
+                events.push(CalendarEvent {
+                    date: due.format("%Y-%m-%d").to_string(),
+                    event_type: "credit_card".into(),
+                    source_id: id,
+                    name: format!("{} Payment", label),
+                    amount: min_pay.unwrap_or(balance),
+                    category: "Credit Card".into(),
+                    is_overdue: due < today,
+                });
+            }
+        }
+    }
+
+    // ── Bills: generate all occurrences of active bills within the month ──────
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, category, amount, frequency, next_due_date
+             FROM bills WHERE is_active=1"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+                r.get::<_, f64>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?))
+        })?;
+        for row in rows.flatten() {
+            let (id, name, category, amount, frequency, due_str) = row;
+            let Ok(mut date) = NaiveDate::parse_from_str(&due_str, "%Y-%m-%d") else { continue };
+            // Advance to first occurrence >= first_day
+            while date < first_day {
+                if frequency == "one_time" { break; }
+                date = advance_date(date, &frequency);
+            }
+            // Emit all occurrences in [first_day, last_day]
+            loop {
+                if date > last_day { break; }
+                if date < first_day { break; } // one_time in past
+                events.push(CalendarEvent {
+                    date: date.format("%Y-%m-%d").to_string(),
+                    event_type: "bill".into(),
+                    source_id: id,
+                    name: name.clone(),
+                    amount,
+                    category: category.clone(),
+                    is_overdue: date < today,
+                });
+                if frequency == "one_time" { break; }
+                date = advance_date(date, &frequency);
+            }
+        }
+    }
+
+    // ── Goals: emit if target_date falls in [first_day, last_day] ────────────
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, category, target_amount, target_date FROM goals"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+                r.get::<_, f64>(3)?, r.get::<_, String>(4)?))
+        })?;
+        for row in rows.flatten() {
+            let (id, name, category, target_amount, date_str) = row;
+            if let Ok(date) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+                if date >= first_day && date <= last_day {
+                    events.push(CalendarEvent {
+                        date: date_str,
+                        event_type: "goal".into(),
+                        source_id: id,
+                        name,
+                        amount: target_amount,
+                        category,
+                        is_overdue: date < today,
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Recurring transactions: same iteration logic as bills ─────────────────
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, type, category, amount, frequency, next_due_date
+             FROM recurring_transactions WHERE is_active=1"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?, r.get::<_, f64>(4)?,
+                r.get::<_, String>(5)?, r.get::<_, String>(6)?))
+        })?;
+        for row in rows.flatten() {
+            let (id, name, type_, category, amount, frequency, due_str) = row;
+            let Ok(mut date) = NaiveDate::parse_from_str(&due_str, "%Y-%m-%d") else { continue };
+            while date < first_day {
+                date = advance_date(date, &frequency);
+            }
+            loop {
+                if date > last_day { break; }
+                events.push(CalendarEvent {
+                    date: date.format("%Y-%m-%d").to_string(),
+                    event_type: "recurring".into(),
+                    source_id: id,
+                    name: name.clone(),
+                    amount,
+                    category: format!("{} — {}", type_, category),
+                    is_overdue: date < today,
+                });
+                date = advance_date(date, &frequency);
+            }
+        }
+    }
+
+    events.sort_by(|a, b| a.date.cmp(&b.date));
+    Ok(events)
+}

@@ -75,7 +75,33 @@ pub fn calc_net_worth(conn: &Connection) -> Result<NetWorthSummary> {
         )
         .unwrap_or(0.0);
 
-    let total_assets = equity + mf + fd + ppf_epf + real_estate + gold + crypto;
+    let bonds: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(quantity * COALESCE(current_price, purchase_price)), 0) FROM bond_holdings",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+
+    // Cash balance from transactions: income/dividends/interest inflow minus expenses/EMIs.
+    // buy/sell/sip/redemption/deposit/withdrawal are excluded — those affect holdings already tracked above.
+    let cash: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(
+                CASE
+                    WHEN type IN ('income','dividend','interest') THEN amount
+                    WHEN type IN ('expense','emi') THEN -amount
+                    ELSE 0
+                END
+             ), 0) FROM transactions",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+
+    let holdings_total = equity + mf + fd + ppf_epf + real_estate + gold + crypto + bonds;
+    // Positive cash adds to assets; negative cash (overspent) adds to liabilities
+    let total_assets      = holdings_total + cash.max(0.0);
 
     let loans: f64 = conn
         .query_row("SELECT COALESCE(SUM(outstanding), 0) FROM loans", [], |r| r.get(0))
@@ -85,7 +111,7 @@ pub fn calc_net_worth(conn: &Connection) -> Result<NetWorthSummary> {
         .query_row("SELECT COALESCE(SUM(current_balance), 0) FROM credit_cards", [], |r| r.get(0))
         .unwrap_or(0.0);
 
-    let total_liabilities = loans + credit_cards;
+    let total_liabilities = loans + credit_cards + (-cash).max(0.0);
 
     Ok(NetWorthSummary {
         total_assets,
@@ -109,11 +135,24 @@ pub fn calc_allocation(conn: &Connection) -> Result<Vec<AllocationItem>> {
         "SELECT COALESCE(SUM(COALESCE(weight_grams, units, 0) * COALESCE(current_price, avg_buy_price)), 0) FROM gold_holdings", [], |r| r.get(0)).unwrap_or(0.0);
     let crypto: f64 = conn.query_row(
         "SELECT COALESCE(SUM(quantity * COALESCE(current_price, avg_buy_price)), 0) FROM crypto_holdings", [], |r| r.get(0)).unwrap_or(0.0);
+    let bonds: f64 = conn.query_row(
+        "SELECT COALESCE(SUM(quantity * COALESCE(current_price, purchase_price)), 0) FROM bond_holdings", [], |r| r.get(0)).unwrap_or(0.0);
+    let cash: f64 = conn.query_row(
+        "SELECT COALESCE(SUM(
+             CASE
+                 WHEN type IN ('income','dividend','interest') THEN amount
+                 WHEN type IN ('expense','emi') THEN -amount
+                 ELSE 0
+             END
+          ), 0) FROM transactions",
+        [], |r| r.get(0)).unwrap_or(0.0);
+    // Only count positive cash balance in allocation (negative means overspent — shown as liability)
+    let cash_alloc = cash.max(0.0);
 
-    let total = equity + mf + fd + ppf_epf + real_estate + gold + crypto;
+    let total = equity + mf + fd + ppf_epf + real_estate + gold + crypto + bonds + cash_alloc;
     let pct = |v: f64| if total > 0.0 { (v / total) * 100.0 } else { 0.0 };
 
-    Ok(vec![
+    let mut items = vec![
         AllocationItem { label: "Equity".into(), value: equity, percent: pct(equity) },
         AllocationItem { label: "Mutual Funds".into(), value: mf, percent: pct(mf) },
         AllocationItem { label: "FD/RD".into(), value: fd, percent: pct(fd) },
@@ -121,5 +160,10 @@ pub fn calc_allocation(conn: &Connection) -> Result<Vec<AllocationItem>> {
         AllocationItem { label: "Real Estate".into(), value: real_estate, percent: pct(real_estate) },
         AllocationItem { label: "Gold".into(), value: gold, percent: pct(gold) },
         AllocationItem { label: "Crypto".into(), value: crypto, percent: pct(crypto) },
-    ])
+        AllocationItem { label: "Bonds".into(), value: bonds, percent: pct(bonds) },
+    ];
+    if cash_alloc > 0.0 {
+        items.push(AllocationItem { label: "Cash".into(), value: cash_alloc, percent: pct(cash_alloc) });
+    }
+    Ok(items)
 }

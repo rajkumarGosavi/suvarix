@@ -93,6 +93,11 @@ pub fn run() {
             portfolio::commands::add_sip_schedule,
             portfolio::commands::update_sip_schedule,
             portfolio::commands::delete_sip_schedule,
+            // portfolio – bonds
+            portfolio::commands::list_bonds,
+            portfolio::commands::add_bond,
+            portfolio::commands::update_bond,
+            portfolio::commands::delete_bond,
             // transactions
             transactions::commands::list_transactions,
             transactions::commands::add_transaction,
@@ -159,6 +164,7 @@ pub fn run() {
             reminders::commands::list_milestones,
             reminders::commands::add_milestone,
             reminders::commands::delete_milestone,
+            reminders::commands::get_calendar_events,
             // analytics
             analytics::commands::track_event,
             analytics::commands::track_error,

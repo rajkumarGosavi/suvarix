@@ -26,6 +26,7 @@ export const usePortfolioStore = defineStore("portfolio", {
         gold: [] as any[],
         crypto: [] as any[],
         insurance: [] as any[],
+        bonds: [] as any[],
     }),
 
     actions: {
@@ -61,6 +62,9 @@ export const usePortfolioStore = defineStore("portfolio", {
         async fetchInsurance() {
             this.insurance = await invoke("list_insurance");
         },
+        async fetchBonds() {
+            this.bonds = await invoke("list_bonds");
+        },
 
         async fetchAll() {
             this.isLoading = true;
@@ -76,6 +80,7 @@ export const usePortfolioStore = defineStore("portfolio", {
                     this.fetchGold(),
                     this.fetchCrypto(),
                     this.fetchInsurance(),
+                    this.fetchBonds(),
                 ]);
             } finally {
                 this.isLoading = false;

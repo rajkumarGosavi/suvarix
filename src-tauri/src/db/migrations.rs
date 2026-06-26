@@ -10,6 +10,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_006).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_007).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_008).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute_batch(MIGRATION_009).map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
 }
 
@@ -358,4 +359,27 @@ INSERT OR IGNORE INTO milestones (amount, label, is_custom) VALUES
     (25000000,  '₹2.5 Crore',  0),
     (50000000,  '₹5 Crore',    0),
     (100000000, '₹10 Crore',   0);
+";
+
+const MIGRATION_009: &str = "
+CREATE TABLE IF NOT EXISTS bond_holdings (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id       INTEGER,
+    isin             TEXT,
+    issuer_name      TEXT NOT NULL,
+    bond_type        TEXT NOT NULL DEFAULT 'corporate'
+                         CHECK(bond_type IN ('government','corporate','tax_free','sgb','ncd','treasury_bill')),
+    face_value       REAL NOT NULL DEFAULT 1000,
+    quantity         REAL NOT NULL,
+    purchase_price   REAL NOT NULL,
+    current_price    REAL,
+    coupon_rate      REAL NOT NULL DEFAULT 0,
+    coupon_frequency TEXT NOT NULL DEFAULT 'semi_annual'
+                         CHECK(coupon_frequency IN ('annual','semi_annual','quarterly','monthly','zero_coupon')),
+    purchase_date    TEXT NOT NULL,
+    maturity_date    TEXT,
+    credit_rating    TEXT,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ";

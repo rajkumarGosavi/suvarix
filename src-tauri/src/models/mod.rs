@@ -1,4 +1,5 @@
 pub mod account;
+pub mod bond;
 pub mod budget;
 pub mod crypto;
 pub mod equity;

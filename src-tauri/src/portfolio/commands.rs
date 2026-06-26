@@ -2,7 +2,7 @@ use tauri::State;
 use serde::{Deserialize, Serialize};
 use crate::db::DbState;
 use crate::error::{AppError, Result};
-use crate::models::{equity::*, mf::*, fd::*, ppf_epf::*, real_estate::*, gold::*, crypto::*, insurance::*};
+use crate::models::{equity::*, mf::*, fd::*, ppf_epf::*, real_estate::*, gold::*, crypto::*, insurance::*, bond::*};
 use super::calculator::{self, AllocationItem, NetWorthSummary};
 
 // ─── NET WORTH & ALLOCATION ──────────────────────────────────────────────────
@@ -517,5 +517,83 @@ pub fn update_sip_schedule(id: i64, payload: AddSipPayload, state: State<DbState
 pub fn delete_sip_schedule(id: i64, state: State<DbState>) -> Result<()> {
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     conn.execute("DELETE FROM sip_schedules WHERE id=?1", [id])?;
+    Ok(())
+}
+
+// ─── BONDS ───────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_bonds(state: State<DbState>) -> Result<Vec<BondHolding>> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    let mut stmt = conn.prepare(
+        "SELECT id, account_id, isin, issuer_name, bond_type, face_value, quantity,
+                purchase_price, current_price, coupon_rate, coupon_frequency,
+                purchase_date, maturity_date, credit_rating, created_at, updated_at
+         FROM bond_holdings ORDER BY issuer_name"
+    )?;
+    let rows = stmt.query_map([], |r| Ok(BondHolding {
+        id: r.get(0)?,
+        account_id: r.get(1)?,
+        isin: r.get(2)?,
+        issuer_name: r.get(3)?,
+        bond_type: r.get(4)?,
+        face_value: r.get(5)?,
+        quantity: r.get(6)?,
+        purchase_price: r.get(7)?,
+        current_price: r.get(8)?,
+        coupon_rate: r.get(9)?,
+        coupon_frequency: r.get(10)?,
+        purchase_date: r.get(11)?,
+        maturity_date: r.get(12)?,
+        credit_rating: r.get(13)?,
+        created_at: r.get(14)?,
+        updated_at: r.get(15)?,
+    }))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+pub fn add_bond(payload: AddBondPayload, state: State<DbState>) -> Result<i64> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    conn.execute(
+        "INSERT INTO bond_holdings
+         (account_id, isin, issuer_name, bond_type, face_value, quantity,
+          purchase_price, current_price, coupon_rate, coupon_frequency,
+          purchase_date, maturity_date, credit_rating)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        rusqlite::params![
+            payload.account_id, payload.isin, payload.issuer_name, payload.bond_type,
+            payload.face_value, payload.quantity, payload.purchase_price, payload.current_price,
+            payload.coupon_rate, payload.coupon_frequency, payload.purchase_date,
+            payload.maturity_date, payload.credit_rating
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+pub fn update_bond(id: i64, payload: AddBondPayload, state: State<DbState>) -> Result<()> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    conn.execute(
+        "UPDATE bond_holdings SET
+         account_id=?1, isin=?2, issuer_name=?3, bond_type=?4, face_value=?5,
+         quantity=?6, purchase_price=?7, current_price=?8, coupon_rate=?9,
+         coupon_frequency=?10, purchase_date=?11, maturity_date=?12,
+         credit_rating=?13, updated_at=datetime('now')
+         WHERE id=?14",
+        rusqlite::params![
+            payload.account_id, payload.isin, payload.issuer_name, payload.bond_type,
+            payload.face_value, payload.quantity, payload.purchase_price, payload.current_price,
+            payload.coupon_rate, payload.coupon_frequency, payload.purchase_date,
+            payload.maturity_date, payload.credit_rating, id
+        ],
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_bond(id: i64, state: State<DbState>) -> Result<()> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    conn.execute("DELETE FROM bond_holdings WHERE id=?1", [id])?;
     Ok(())
 }
