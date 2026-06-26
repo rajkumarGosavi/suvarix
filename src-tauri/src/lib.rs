@@ -146,6 +146,7 @@ pub fn run() {
             goals::commands::add_goal,
             goals::commands::update_goal,
             goals::commands::delete_goal,
+            goals::commands::mark_goal_achieved,
             goals::commands::check_goal_achievements,
             // reminders
             reminders::commands::list_bills,

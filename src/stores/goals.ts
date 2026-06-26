@@ -47,5 +47,9 @@ export const useGoalsStore = defineStore("goals", {
             await invoke("delete_goal", { id });
             await this.fetchGoals();
         },
+        async markAchieved(id: number) {
+            await invoke("mark_goal_achieved", { id });
+            await this.fetchGoals();
+        },
     },
 });

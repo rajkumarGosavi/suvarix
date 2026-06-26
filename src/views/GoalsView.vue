@@ -50,6 +50,7 @@ function openAdd() {
 }
 
 function openEdit(goal: any) {
+    if (goal.achieved) return;
     editId.value = goal.id;
     form.name = goal.name;
     form.category = goal.category;
@@ -93,6 +94,17 @@ function confirmDelete(goal: any) {
     });
 }
 
+function confirmMarkAchieved(goal: any) {
+    confirm.require({
+        message: `Mark "${goal.name}" as achieved? It will become read-only.`,
+        header: "Mark as Achieved",
+        icon: "pi pi-check-circle",
+        rejectProps: { label: "Cancel", severity: "secondary", outlined: true },
+        acceptProps: { label: "Mark Achieved", severity: "success" },
+        accept: () => goalsStore.markAchieved(goal.id),
+    });
+}
+
 // ─── computed per-goal metrics ─────────────────────────────────
 
 const totalAssets = computed(() => portfolio.netWorth?.totalAssets ?? 0);
@@ -104,7 +116,7 @@ const enrichedGoals = computed(() =>
         const target = strToDate(g.targetDate)!;
         const diffMs = target.getTime() - today.getTime();
         const monthsLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24 * 30.44));
-        const achieved = totalAssets.value >= g.targetAmount;
+        const achieved = g.achievedAt !== null || totalAssets.value >= g.targetAmount;
         return { ...g, progress, monthsLeft, achieved };
     }),
 );
@@ -177,7 +189,22 @@ onMounted(() => {
                         <span class="goal-name">{{ g.name }}</span>
                     </div>
                     <div class="goal-card-actions">
-                        <Button icon="pi pi-pencil" text size="small" @click="openEdit(g)" />
+                        <Button
+                            v-if="!g.achieved"
+                            icon="pi pi-check"
+                            text
+                            size="small"
+                            severity="success"
+                            v-tooltip.top="'Mark as Achieved'"
+                            @click="confirmMarkAchieved(g)"
+                        />
+                        <Button
+                            v-if="!g.achieved"
+                            icon="pi pi-pencil"
+                            text
+                            size="small"
+                            @click="openEdit(g)"
+                        />
                         <Button icon="pi pi-trash" text size="small" severity="danger" @click="confirmDelete(g)" />
                     </div>
                 </div>
@@ -209,12 +236,12 @@ onMounted(() => {
 
                 <!-- Footer row -->
                 <div class="goal-footer">
-                    <Tag
-                        v-if="g.achieved"
-                        value="Achieved"
-                        severity="success"
-                        icon="pi pi-check"
-                    />
+                    <template v-if="g.achieved">
+                        <Tag value="Achieved" severity="success" icon="pi pi-check" />
+                        <span v-if="g.achievedAt" class="goal-date">
+                            {{ new Date(g.achievedAt + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) }}
+                        </span>
+                    </template>
                     <template v-else>
                         <span class="goal-date">
                             {{ new Date(g.targetDate + "T00:00:00").toLocaleDateString("en-IN", { month: "short", year: "numeric" }) }}
@@ -225,6 +252,7 @@ onMounted(() => {
                             size="small"
                         />
                     </template>
+
                     <span class="goal-cat-badge">{{ categoryLabel(g.category) }}</span>
                 </div>
             </div>

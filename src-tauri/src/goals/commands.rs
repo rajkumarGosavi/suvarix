@@ -100,6 +100,17 @@ pub fn delete_goal(id: i64, state: State<DbState>) -> Result<()> {
     Ok(())
 }
 
+/// Manually mark a goal as achieved regardless of current net worth.
+#[tauri::command]
+pub fn mark_goal_achieved(id: i64, state: State<DbState>) -> Result<()> {
+    let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    conn.execute(
+        "UPDATE goals SET achieved_at = date('now'), updated_at = datetime('now') WHERE id = ?1",
+        [id],
+    )?;
+    Ok(())
+}
+
 /// Check total_assets against unachieved goals. Marks newly reached ones and
 /// returns only the newly achieved goals so the caller can notify.
 #[tauri::command]
