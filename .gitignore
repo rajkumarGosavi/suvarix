@@ -29,6 +29,12 @@ dist-ssr
 # Tauri build output
 src-tauri/target/
 
+# Tauri generated (Android/iOS project + schemas — regenerate with `tauri android init`)
+src-tauri/gen/
+
+# Local dev files
+todo.txt
+
 # Seed / dev scripts
 seed.mjs
 
