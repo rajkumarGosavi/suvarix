@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { useConfirm } from "primevue/useconfirm";
 import { useToast } from "primevue/usetoast";
@@ -280,7 +281,8 @@ onMounted(async () => {
     } catch { /* non-critical */ }
 });
 
-const APP_VERSION = "0.2.0";
+const appVersion = ref("");
+getVersion().then(v => appVersion.value = v);
 </script>
 
 <template>
@@ -524,7 +526,7 @@ const APP_VERSION = "0.2.0";
                 <span class="about-label">App</span>
                 <span>FinFolio — Personal Finance Tracker</span>
                 <span class="about-label">Version</span>
-                <span>{{ APP_VERSION }}</span>
+                <span>{{ appVersion }}</span>
                 <span class="about-label">Data directory</span>
                 <span class="about-path">{{ appDataDir || "—" }}</span>
                 <span class="about-label">Privacy</span>

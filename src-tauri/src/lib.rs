@@ -157,8 +157,8 @@ pub fn run() {
             data_sources::commands::login_angel,
             data_sources::commands::sync_angel_holdings,
             data_sources::commands::disconnect_angel,
-            // data sources – groww
-            data_sources::commands::import_groww_csv,
+            // data sources – csv import (all brokers)
+            data_sources::commands::import_broker_equity_csv,
             // goals
             goals::commands::list_goals,
             goals::commands::add_goal,

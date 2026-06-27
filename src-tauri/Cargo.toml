@@ -1,13 +1,13 @@
 [package]
-name = "portfolio-tracker"
-version = "0.2.0"
+name = "finfolio"
+version = "0.3.0"
 description = "FinFolio — Personal Finance Tracker"
 authors = ["Rajkumar"]
 license = "LicenseRef-Proprietary"
 edition = "2021"
 
 [lib]
-name = "portfolio_tracker_lib"
+name = "finfolio_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -1,6 +1,5 @@
 # Broker CSV Import — Design Spec
 
-**Date:** 2026-06-27  
 **Feature:** CSV import of equity holdings for Zerodha, Upstox, Angel One  
 **Status:** Approved
 
@@ -28,26 +27,28 @@ CSV import for **Zerodha, Upstox, Angel One** equity holdings only. No MF, no FD
 
 ## Architecture
 
-### Backend — one new Rust command
+### Backend — one shared command replacing `import_groww_csv`
 
 File: `src-tauri/src/data_sources/commands.rs`
+
+`GrowwRow` renamed → `BrokerCsvRow` (fields unchanged). `import_groww_csv` replaced by:
 
 ```rust
 #[tauri::command]
 pub fn import_broker_equity_csv(
-    broker: String,       // "zerodha" | "upstox" | "angel_one"
-    display_name: String, // "Zerodha" | "Upstox" | "Angel One"
-    rows: Vec<GrowwRow>,  // reuse existing struct
+    broker: String,         // "zerodha" | "upstox" | "angel_one" | "groww"
+    display_name: String,   // "Zerodha" | "Upstox" | "Angel One" | "Groww"
+    rows: Vec<BrokerCsvRow>,
     state: State<DbState>,
 ) -> Result<ImportResult>
 ```
 
-- Converts `Vec<GrowwRow>` → `Vec<BrokerHolding>` (same field mapping as Groww import)
+- Converts `Vec<BrokerCsvRow>` → `Vec<BrokerHolding>`
 - Calls existing `write_broker_holdings(&mut conn, &broker, &display_name, &holdings)`
 - Returns `ImportResult { imported, skipped }`
 - No new DB schema, no new migrations
 
-Register in `src-tauri/src/lib.rs` alongside `import_groww_csv`.
+Register in `src-tauri/src/lib.rs`, remove `import_groww_csv`. Adding broker 5 = add frontend parser only, zero Rust changes.
 
 ### Frontend — CSV parsers
 
