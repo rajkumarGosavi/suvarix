@@ -7,7 +7,7 @@
 
 ## Context
 
-FinFolio already supports:
+Suvarix already supports:
 - Zerodha / Upstox — OAuth API sync (desktop only)
 - Angel One — SmartAPI JWT login + sync
 - Groww — CSV import (frontend parse → Rust upsert)

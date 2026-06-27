@@ -1,4 +1,4 @@
-# FinFolio — Personal Finance Tracker
+# Suvarix — Personal Finance Tracker
 
 A privacy-first, offline-first desktop app for Indian investors. Track all your assets, liabilities, income, and expenses in one place — everything stays on your device.
 
@@ -6,10 +6,10 @@ A privacy-first, offline-first desktop app for Indian investors. Track all your 
 
 ## Installation
 
-1. Download `FinFolio_0.1.0_x64-setup.exe` from the link shared with you.
+1. Download `Suvarix_0.1.0_x64-setup.exe` from the link shared with you.
 2. Double-click the installer.
 3. If Windows shows a blue **"Windows protected your PC"** warning, click **More info → Run anyway**. This appears because the app is unsigned (normal for personal/beta software).
-4. Follow the installer steps. FinFolio installs to `%LOCALAPPDATA%\FinFolio`.
+4. Follow the installer steps. Suvarix installs to `%LOCALAPPDATA%\Suvarix`.
 
 ---
 
@@ -175,7 +175,7 @@ Automatically import your equity holdings from Zerodha. Requires a free personal
 2. Create a new Kite Connect app (free for personal use).
 3. Set the **Redirect URL** to exactly: `http://127.0.0.1:7459`
 4. Copy your **API Key** and **API Secret**.
-5. In FinFolio → Data Sources → Zerodha: paste both and click **Save & Connect**.
+5. In Suvarix → Data Sources → Zerodha: paste both and click **Save & Connect**.
 6. A browser window opens — log in to Zerodha. The app captures the token automatically.
 
 **Daily reconnect:** Zerodha access tokens expire at midnight IST. Click **Reconnect** each day before syncing.
@@ -195,7 +195,7 @@ Import mutual fund holdings from an MF Central Consolidated Account Statement PD
 
 **Import steps:**
 1. Download both PDFs from [www.mfcentral.com](https://www.mfcentral.com) → Consolidated Account Statement.
-2. In FinFolio → Data Sources → MF Central CAS:
+2. In Suvarix → Data Sources → MF Central CAS:
    - Upload the **Summary PDF** in the left slot.
    - Upload the **Detailed PDF** in the right slot.
 3. Enter your CAS password (the one you set when generating the statement).
@@ -218,7 +218,7 @@ Useful for tax planning. Filter by financial year.
 
 ### Net Worth History
 
-Chart of your net worth over time. FinFolio takes a snapshot each time you view the page. Use **Take Snapshot Now** to manually record the current value.
+Chart of your net worth over time. Suvarix takes a snapshot each time you view the page. Use **Take Snapshot Now** to manually record the current value.
 
 ---
 
@@ -241,11 +241,11 @@ Switch between **Light**, **Dark**, and **System** (follows your Windows theme).
 | Restore Database | Replaces all data with a backup file |
 | Wipe All Data | Permanently deletes all portfolio/transaction data (password and settings are kept) |
 
-Keep regular backups. The database file is stored in `%APPDATA%\com.rajkumar.finfolio\finfolio.db`.
+Keep regular backups. The database file is stored in `%APPDATA%\com.rajkumar.suvarix\suvarix.db`.
 
 ### Diagnostics
 
-FinFolio records usage events, errors, and page load times locally — nothing is sent anywhere.
+Suvarix records usage events, errors, and page load times locally — nothing is sent anywhere.
 
 - **Feature Usage** — which screens you visit most
 - **Recent Errors** — any app errors that occurred

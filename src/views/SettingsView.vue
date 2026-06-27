@@ -93,7 +93,7 @@ async function doBackup() {
     backupLoading.value = true;
     try {
         const dest = await save({
-            defaultPath: `finfolio-backup-${new Date().toISOString().slice(0, 10)}.db`,
+            defaultPath: `${APP_NAME.toLowerCase()}-backup-${new Date().toISOString().slice(0, 10)}.db`,
             filters: [{ name: "SQLite Database", extensions: ["db"] }],
         });
         if (!dest) return;
@@ -177,7 +177,7 @@ async function exportDiag() {
         const data = await invoke<AnalyticsExport>("export_analytics");
         const json = JSON.stringify(data, null, 2);
         const dest = await save({
-            defaultPath: `finfolio-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
+            defaultPath: `${APP_NAME.toLowerCase()}-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
             filters: [{ name: "JSON", extensions: ["json"] }],
         });
         if (!dest) return;

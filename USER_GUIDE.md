@@ -1,6 +1,6 @@
-# FinFolio — User Guide
+# Suvarix — User Guide
 
-FinFolio is a privacy-first personal finance desktop app for Indian investors. All data is stored locally on your device — nothing is ever sent to the cloud.
+Suvarix is a privacy-first personal finance desktop app for Indian investors. All data is stored locally on your device — nothing is ever sent to the cloud.
 
 ---
 
@@ -24,13 +24,13 @@ FinFolio is a privacy-first personal finance desktop app for Indian investors. A
 
 ### Installation
 
-1. Download `FinFolio_0.1.0_x64-setup.exe` from the link shared with you.
+1. Download `Suvarix_0.1.0_x64-setup.exe` from the link shared with you.
 2. Double-click the installer and follow the steps.
 3. If Windows shows a blue **"Windows protected your PC"** warning, click **More info → Run anyway**. This is expected for unsigned personal software.
 
 ### First Launch — Set Master Password
 
-When you open FinFolio for the first time you will see the **Setup** screen.
+When you open Suvarix for the first time you will see the **Setup** screen.
 
 1. Enter a master password (minimum 8 characters).
 2. Re-enter it to confirm.
@@ -423,7 +423,7 @@ Automatically import your Zerodha equity holdings. Requires a free personal Kite
 2. Click **Create new app**.
 3. Set the **Redirect URL** to exactly: `http://127.0.0.1:7459`
 4. Copy your **API Key** and **API Secret**.
-5. In FinFolio → Data Sources → Zerodha: paste both and click **Save & Connect**.
+5. In Suvarix → Data Sources → Zerodha: paste both and click **Save & Connect**.
 6. Your browser opens the Zerodha login page — log in. The app captures the token automatically and shows "Connected".
 
 > The API key and secret are stored only in your local database. They never leave your device.
@@ -471,7 +471,7 @@ Uploading both together gives you the best of both: correct ISINs **and** correc
 
 #### Importing
 
-1. In FinFolio → Data Sources → MF Central CAS:
+1. In Suvarix → Data Sources → MF Central CAS:
    - Upload the Summary PDF in the **left slot** (labelled "Summary").
    - Upload the Detailed PDF in the **right slot** (labelled "Detailed").
 2. Enter your CAS PDF **password**.
@@ -601,7 +601,7 @@ Switch between **Light**, **Dark**, and **System** (follows your Windows theme s
 Click **Backup** to save a full copy of your database.
 
 - A native save-file dialog opens.
-- Default filename includes today's date (e.g. `finfolio-backup-2026-06-25.db`).
+- Default filename includes today's date (e.g. `suvarix-backup-2026-06-25.db`).
 - Store backups on an external drive or cloud folder.
 
 > Recommended: back up before updating the app and after entering large amounts of data.
@@ -627,7 +627,7 @@ Your master password and app settings are not affected.
 
 ### Diagnostics
 
-FinFolio records usage events, errors, and page load times **locally on your device only**. Nothing is sent anywhere.
+Suvarix records usage events, errors, and page load times **locally on your device only**. Nothing is sent anywhere.
 
 | Panel | What it shows |
 |---|---|
@@ -647,7 +647,7 @@ Click **Clear** (confirm with the dialog) to delete all diagnostic data from you
 
 ### About
 
-Shows app name, version, data directory path, and privacy statement. The data directory path is where your `finfolio.db` database file lives.
+Shows app name, version, data directory path, and privacy statement. The data directory path is where your `suvarix.db` database file lives.
 
 ---
 
@@ -655,7 +655,7 @@ Shows app name, version, data directory path, and privacy statement. The data di
 
 ### Local-Only Storage
 
-All data is stored in a single SQLite database file on your computer. FinFolio makes no network requests except when you explicitly click a price refresh, market indices fetch, or Zerodha sync button.
+All data is stored in a single SQLite database file on your computer. Suvarix makes no network requests except when you explicitly click a price refresh, market indices fetch, or Zerodha sync button.
 
 ### Master Password
 
@@ -665,15 +665,15 @@ Required every time you open the app and after an auto-lock timeout. Never store
 
 | OS | Path |
 |---|---|
-| Windows | `C:\Users\<you>\AppData\Roaming\com.rajkumar.finfolio\` |
-| macOS | `~/Library/Application Support/com.rajkumar.finfolio/` |
-| Linux | `~/.local/share/com.rajkumar.finfolio/` |
+| Windows | `C:\Users\<you>\AppData\Roaming\com.rajkumar.suvarix\` |
+| macOS | `~/Library/Application Support/com.rajkumar.suvarix/` |
+| Linux | `~/.local/share/com.rajkumar.suvarix/` |
 
 The exact path is shown in **Settings → About → Data directory**.
 
 ### Backup Recommendation
 
-FinFolio does not automatically back up your data. Set a reminder to use **Settings → Backup Database** regularly:
+Suvarix does not automatically back up your data. Set a reminder to use **Settings → Backup Database** regularly:
 - After adding new holdings
 - Before and after app updates
 - Monthly as a routine habit
