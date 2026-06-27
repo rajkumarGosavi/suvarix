@@ -15,6 +15,15 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(MIGRATION_010);
     // MIGRATION_011 uses IF NOT EXISTS throughout — safe to re-run
     conn.execute_batch(MIGRATION_011).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_012: relax exchange CHECK constraint — only runs if old CHECK still present
+    let schema_sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='equity_holdings'",
+        [],
+        |r| r.get(0),
+    ).unwrap_or_default();
+    if schema_sql.contains("CHECK(exchange") || schema_sql.contains("CHECK (exchange") {
+        conn.execute_batch(MIGRATION_012).map_err(|e| AppError::Database(e.to_string()))?;
+    }
     Ok(())
 }
 
@@ -391,6 +400,29 @@ CREATE TABLE IF NOT EXISTS bond_holdings (
 // ALTER TABLE is not idempotent — this migration is run with error ignored in run_migrations
 const MIGRATION_010: &str = "
 ALTER TABLE goals ADD COLUMN achieved_at TEXT;
+";
+
+const MIGRATION_012: &str = "
+CREATE TABLE equity_holdings_new (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id       INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    isin             TEXT NOT NULL,
+    symbol           TEXT NOT NULL,
+    exchange         TEXT NOT NULL,
+    name             TEXT NOT NULL,
+    quantity         REAL NOT NULL,
+    avg_buy_price    REAL NOT NULL,
+    current_price    REAL,
+    price_updated_at TEXT,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(account_id, isin)
+);
+INSERT INTO equity_holdings_new SELECT * FROM equity_holdings;
+DROP TABLE equity_holdings;
+ALTER TABLE equity_holdings_new RENAME TO equity_holdings;
+CREATE INDEX IF NOT EXISTS idx_equity_isin ON equity_holdings(isin);
+CREATE INDEX IF NOT EXISTS idx_equity_account ON equity_holdings(account_id);
 ";
 
 const MIGRATION_011: &str = "
