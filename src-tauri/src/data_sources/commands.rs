@@ -652,7 +652,7 @@ pub fn disconnect_angel(state: State<DbState>) -> Result<()> {
 
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct GrowwRow {
+pub struct BrokerCsvRow {
     pub symbol: String,
     pub isin: Option<String>,
     pub quantity: f64,
@@ -662,59 +662,33 @@ pub struct GrowwRow {
 }
 
 #[tauri::command]
-pub fn import_groww_csv(rows: Vec<GrowwRow>, state: State<DbState>) -> Result<ImportResult> {
+pub fn import_broker_equity_csv(
+    broker: String,
+    display_name: String,
+    rows: Vec<BrokerCsvRow>,
+    state: State<DbState>,
+) -> Result<ImportResult> {
+    let holdings: Vec<broker::BrokerHolding> = rows
+        .iter()
+        .filter(|r| r.quantity > 0.0 && r.avg_price > 0.0)
+        .map(|r| {
+            let isin = r.isin.clone().unwrap_or_default();
+            broker::BrokerHolding {
+                symbol: r.symbol.clone(),
+                exchange: r.exchange.clone().unwrap_or_else(|| "-".into()),
+                isin: if isin.is_empty() { r.symbol.clone() } else { isin },
+                quantity: r.quantity,
+                avg_price: r.avg_price,
+                current_price: r.ltp.unwrap_or(r.avg_price),
+                name: None,
+            }
+        })
+        .collect();
+
+    let skipped = (rows.len() as i64) - (holdings.len() as i64);
+
     let mut conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
+    let imported = broker::write_broker_holdings(&mut conn, &broker, &display_name, &holdings)?;
 
-    // Ensure a Groww broker account exists
-    conn.execute(
-        "INSERT OR IGNORE INTO accounts
-             (name, type, provider, is_active, created_at, updated_at)
-         VALUES ('Groww', 'broker', 'groww', 1, datetime('now'), datetime('now'))",
-        [],
-    )?;
-
-    let account_id: i64 = conn.query_row(
-        "SELECT id FROM accounts WHERE provider='groww'",
-        [],
-        |r| r.get(0),
-    )?;
-
-    let tx = conn.transaction()?;
-    tx.execute("DELETE FROM equity_holdings WHERE account_id=?1", [account_id])?;
-
-    let price_ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let mut imported = 0i64;
-    let mut skipped = 0i64;
-
-    for row in &rows {
-        if row.quantity <= 0.0 || row.avg_price <= 0.0 {
-            skipped += 1;
-            continue;
-        }
-        let result = tx.execute(
-            "INSERT INTO equity_holdings
-                 (account_id, isin, symbol, exchange, name,
-                  quantity, avg_buy_price, current_price, price_updated_at,
-                  created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,datetime('now'),datetime('now'))",
-            rusqlite::params![
-                account_id,
-                row.isin.as_deref().unwrap_or(""),
-                row.symbol,
-                row.exchange.as_deref().unwrap_or("NSE"),
-                row.symbol,
-                row.quantity,
-                row.avg_price,
-                row.ltp.unwrap_or(row.avg_price),
-                price_ts,
-            ],
-        );
-        match result {
-            Ok(_) => imported += 1,
-            Err(_) => skipped += 1,
-        }
-    }
-
-    tx.commit()?;
     Ok(ImportResult { imported, skipped })
 }

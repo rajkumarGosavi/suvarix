@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import * as XLSX from "xlsx";
 import { usePricesStore } from "@/stores/prices";
 import { useZerodhaStore } from "@/stores/zerodha";
 import { useUpstoxStore } from "@/stores/upstox";
@@ -59,8 +60,8 @@ async function loginAngel() {
     }
 }
 
-// ── Groww CSV ───────────────────────────────────────────────────
-interface GrowwRow {
+// ── Broker CSV shared ────────────────────────────────────────────
+interface BrokerCsvRow {
     symbol: string;
     isin?: string;
     quantity: number;
@@ -69,31 +70,299 @@ interface GrowwRow {
     exchange?: string;
 }
 
-const growwRows = ref<GrowwRow[]>([]);
-const growwPreview = ref<GrowwRow[]>([]);
-const growwImporting = ref(false);
-const growwImportResult = ref<{ imported: number; skipped: number } | null>(null);
-const growwError = ref<string | null>(null);
+interface ImportResult {
+    imported: number;
+    skipped: number;
+}
 
-function parseGrowwCsv(text: string): GrowwRow[] {
+function parseCsvHeaders(text: string) {
     const lines = text.split('\n').filter(l => l.trim());
-    if (lines.length < 2) return [];
-    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
-    const col = (names: string[]) => names.find(n => headers.includes(n)) ?? names[0];
-    const symbolIdx = headers.indexOf(col(['symbol', 'ticker', 'scrip']));
-    const isinIdx = headers.indexOf(col(['isin']));
-    const qtyIdx = headers.indexOf(col(['qty', 'quantity']));
-    const avgIdx = headers.indexOf(col(['avg_price', 'avg_cost', 'average_price', 'buy_price']));
-    const ltpIdx = headers.indexOf(col(['ltp', 'current_price', 'cmp']));
-    const exchIdx = headers.indexOf(col(['exchange', 'exch']));
+    if (lines.length < 2) return null;
+    const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/_+$/g, ''));
+    const col = (names: string[]) => {
+        const found = names.find(n => headers.includes(n));
+        return found ? headers.indexOf(found) : -1;
+    };
+    const splitRow = (line: string) => line.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+    return { lines, col, splitRow };
+}
+
+async function invokeBrokerCsvImport(broker: string, displayName: string, rows: BrokerCsvRow[]): Promise<ImportResult> {
+    return invoke<ImportResult>("import_broker_equity_csv", {
+        broker,
+        displayName,
+        rows: rows.map(r => ({ symbol: r.symbol, isin: r.isin, quantity: r.quantity, avgPrice: r.avgPrice, ltp: r.ltp, exchange: r.exchange })),
+    });
+}
+
+// ── Zerodha CSV ─────────────────────────────────────────────────
+const zerodhaRows = ref<BrokerCsvRow[]>([]);
+const zerodhaPreview = ref<BrokerCsvRow[]>([]);
+const zerodhaImporting = ref(false);
+const zerodhaImportResult = ref<ImportResult | null>(null);
+const zerodhaImportError = ref<string | null>(null);
+const zerodhaShowCsv = ref(false);
+
+function parseZerodhaCsv(text: string): BrokerCsvRow[] {
+    const parsed = parseCsvHeaders(text);
+    if (!parsed) return [];
+    const { lines, col, splitRow } = parsed;
+    const symbolIdx = col(['instrument', 'symbol', 'scrip', 'stock_symbol']);
+    const isinIdx = col(['isin']);
+    const qtyIdx = col(['qty', 'quantity', 'net_qty']);
+    const avgIdx = col(['avg_cost', 'avg_price', 'average_price', 'buy_price', 'average_cost']);
+    const ltpIdx = col(['ltp', 'last_price', 'cmp', 'close_price']);
+    const exchIdx = col(['exchange', 'exch', 'segment']);
+    if (symbolIdx < 0 || qtyIdx < 0 || avgIdx < 0) return [];
     return lines.slice(1).map(line => {
-        const cols = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+        const cols = splitRow(line);
         return {
             symbol: cols[symbolIdx] ?? '',
             isin: isinIdx >= 0 ? cols[isinIdx] : undefined,
             quantity: parseFloat(cols[qtyIdx]) || 0,
             avgPrice: parseFloat(cols[avgIdx]) || 0,
-            ltp: ltpIdx >= 0 ? parseFloat(cols[ltpIdx]) : undefined,
+            ltp: ltpIdx >= 0 ? parseFloat(cols[ltpIdx]) || undefined : undefined,
+            exchange: exchIdx >= 0 ? cols[exchIdx] : undefined,
+        };
+    }).filter(r => r.symbol && r.quantity > 0 && r.avgPrice > 0);
+}
+
+function parseZerodhaXlsx(buffer: ArrayBuffer): BrokerCsvRow[] {
+    const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+    const ws = wb.Sheets['Equity'];
+    if (!ws) return [];
+    const rows: any[] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const headerRowIdx = rows.findIndex((row: any[]) =>
+        row.some((c: any) => String(c).trim().toLowerCase() === 'symbol')
+    );
+    if (headerRowIdx < 0) return [];
+    const rawHeaders: string[] = rows[headerRowIdx].map((h: any) =>
+        String(h).trim().toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/_+$/g, '')
+    );
+    const col = (names: string[]) => {
+        const found = names.find(n => rawHeaders.includes(n));
+        return found ? rawHeaders.indexOf(found) : -1;
+    };
+    const symbolIdx = col(['symbol', 'instrument', 'scrip', 'stock_symbol']);
+    const isinIdx = col(['isin']);
+    const qtyIdx = col(['quantity_available', 'qty', 'quantity', 'net_qty']);
+    const avgIdx = col(['average_price', 'avg_cost', 'avg_price', 'buy_price', 'average_cost']);
+    const ltpIdx = col(['previous_closing_price', 'ltp', 'last_price', 'cmp', 'close_price']);
+    if (symbolIdx < 0 || qtyIdx < 0 || avgIdx < 0) return [];
+    const mapped = rows.slice(headerRowIdx + 1)
+        .filter((row: any[]) => row.some((c: any) => c !== ''))
+        .map((row: any[]) => ({
+            symbol: String(row[symbolIdx] ?? '').trim(),
+            isin: isinIdx >= 0 ? (String(row[isinIdx] ?? '').trim() || undefined) : undefined,
+            quantity: parseFloat(String(row[qtyIdx] ?? '')) || 0,
+            avgPrice: parseFloat(String(row[avgIdx] ?? '')) || 0,
+            ltp: ltpIdx >= 0 ? (parseFloat(String(row[ltpIdx] ?? '')) || undefined) : undefined,
+            exchange: undefined,
+        }));
+    return mapped.filter(r => r.symbol && r.quantity > 0 && r.avgPrice > 0);
+}
+
+function onZerodhaFile(event: any) {
+    zerodhaImportError.value = null;
+    zerodhaImportResult.value = null;
+    zerodhaRows.value = [];
+    zerodhaPreview.value = [];
+    const file: File = event.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    if (file.name.toLowerCase().endsWith('.xlsx')) {
+        reader.onload = (e) => {
+            try {
+                const parsed = parseZerodhaXlsx(e.target?.result as ArrayBuffer);
+                if (parsed.length === 0) { zerodhaImportError.value = "No valid rows found. Ensure the file has an 'Equity' sheet with Symbol, Quantity Available, and Average Price columns."; return; }
+                zerodhaRows.value = parsed;
+                zerodhaPreview.value = parsed.slice(0, 5);
+            } catch (err: any) { zerodhaImportError.value = `Parse error: ${err?.message ?? err}`; }
+        };
+        reader.readAsArrayBuffer(file);
+    } else {
+        reader.onload = (e) => {
+            try {
+                const parsed = parseZerodhaCsv(e.target?.result as string);
+                if (parsed.length === 0) { zerodhaImportError.value = "No valid rows found. Check the CSV format."; return; }
+                zerodhaRows.value = parsed;
+                zerodhaPreview.value = parsed.slice(0, 5);
+            } catch (err: any) { zerodhaImportError.value = `Parse error: ${err?.message ?? err}`; }
+        };
+        reader.readAsText(file);
+    }
+}
+
+async function importZerodhaCsv() {
+    zerodhaImporting.value = true;
+    zerodhaImportError.value = null;
+    try {
+        const result = await invokeBrokerCsvImport("zerodha", "Zerodha", zerodhaRows.value);
+        zerodhaImportResult.value = result;
+        track("zerodha_csv_import_completed", { imported: result.imported, skipped: result.skipped });
+    } catch (e: any) {
+        zerodhaImportError.value = String(e?.message ?? e);
+    } finally {
+        zerodhaImporting.value = false;
+    }
+}
+
+// ── Upstox CSV ──────────────────────────────────────────────────
+const upstoxCsvRows = ref<BrokerCsvRow[]>([]);
+const upstoxCsvPreview = ref<BrokerCsvRow[]>([]);
+const upstoxCsvImporting = ref(false);
+const upstoxCsvImportResult = ref<ImportResult | null>(null);
+const upstoxCsvImportError = ref<string | null>(null);
+const upstoxShowCsv = ref(false);
+
+function parseUpstoxCsv(text: string): BrokerCsvRow[] {
+    const parsed = parseCsvHeaders(text);
+    if (!parsed) return [];
+    const { lines, col, splitRow } = parsed;
+    const symbolIdx = col(['instrument_name', 'trading_symbol', 'symbol', 'scrip_name', 'stock']);
+    const isinIdx = col(['isin']);
+    const qtyIdx = col(['quantity', 'net_qty', 'qty']);
+    const avgIdx = col(['avg__cost_price', 'avg_cost_price', 'buy_avg_price', 'average_price', 'avg_price']);
+    const ltpIdx = col(['ltp', 'current_price', 'last_price', 'close_price']);
+    const exchIdx = col(['exchange', 'exch', 'segment']);
+    if (symbolIdx < 0 || qtyIdx < 0 || avgIdx < 0) return [];
+    return lines.slice(1).map(line => {
+        const cols = splitRow(line);
+        return {
+            symbol: cols[symbolIdx] ?? '',
+            isin: isinIdx >= 0 ? cols[isinIdx] : undefined,
+            quantity: parseFloat(cols[qtyIdx]) || 0,
+            avgPrice: parseFloat(cols[avgIdx]) || 0,
+            ltp: ltpIdx >= 0 ? parseFloat(cols[ltpIdx]) || undefined : undefined,
+            exchange: exchIdx >= 0 ? cols[exchIdx] : undefined,
+        };
+    }).filter(r => r.symbol && r.quantity > 0 && r.avgPrice > 0);
+}
+
+function onUpstoxFile(event: any) {
+    upstoxCsvImportError.value = null;
+    upstoxCsvImportResult.value = null;
+    upstoxCsvRows.value = [];
+    upstoxCsvPreview.value = [];
+    const file: File = event.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const parsed = parseUpstoxCsv(e.target?.result as string);
+            if (parsed.length === 0) { upstoxCsvImportError.value = "No valid rows found. Check the CSV format."; return; }
+            upstoxCsvRows.value = parsed;
+            upstoxCsvPreview.value = parsed.slice(0, 5);
+        } catch (err: any) { upstoxCsvImportError.value = `Parse error: ${err?.message ?? err}`; }
+    };
+    reader.readAsText(file);
+}
+
+async function importUpstoxCsv() {
+    upstoxCsvImporting.value = true;
+    upstoxCsvImportError.value = null;
+    try {
+        const result = await invokeBrokerCsvImport("upstox", "Upstox", upstoxCsvRows.value);
+        upstoxCsvImportResult.value = result;
+        track("upstox_csv_import_completed", { imported: result.imported, skipped: result.skipped });
+    } catch (e: any) {
+        upstoxCsvImportError.value = String(e?.message ?? e);
+    } finally {
+        upstoxCsvImporting.value = false;
+    }
+}
+
+// ── Angel One CSV ────────────────────────────────────────────────
+const angelCsvRows = ref<BrokerCsvRow[]>([]);
+const angelCsvPreview = ref<BrokerCsvRow[]>([]);
+const angelCsvImporting = ref(false);
+const angelCsvImportResult = ref<ImportResult | null>(null);
+const angelCsvImportError = ref<string | null>(null);
+const angelShowCsv = ref(false);
+
+function parseAngelCsv(text: string): BrokerCsvRow[] {
+    const parsed = parseCsvHeaders(text);
+    if (!parsed) return [];
+    const { lines, col, splitRow } = parsed;
+    const symbolIdx = col(['symbol', 'instrument', 'stock', 'scrip', 'trading_symbol']);
+    const isinIdx = col(['isin']);
+    const qtyIdx = col(['net_qty', 'qty', 'quantity', 'net_quantity']);
+    const avgIdx = col(['avg_buy_price', 'average_buy_price', 'buy_avg_price', 'avg_price', 'average_price']);
+    const ltpIdx = col(['ltp', 'cmp', 'last_price', 'current_price', 'close_price']);
+    const exchIdx = col(['exchange', 'exch', 'segment']);
+    if (symbolIdx < 0 || qtyIdx < 0 || avgIdx < 0) return [];
+    return lines.slice(1).map(line => {
+        const cols = splitRow(line);
+        return {
+            symbol: cols[symbolIdx] ?? '',
+            isin: isinIdx >= 0 ? cols[isinIdx] : undefined,
+            quantity: parseFloat(cols[qtyIdx]) || 0,
+            avgPrice: parseFloat(cols[avgIdx]) || 0,
+            ltp: ltpIdx >= 0 ? parseFloat(cols[ltpIdx]) || undefined : undefined,
+            exchange: exchIdx >= 0 ? cols[exchIdx] : undefined,
+        };
+    }).filter(r => r.symbol && r.quantity > 0 && r.avgPrice > 0);
+}
+
+function onAngelCsvFile(event: any) {
+    angelCsvImportError.value = null;
+    angelCsvImportResult.value = null;
+    angelCsvRows.value = [];
+    angelCsvPreview.value = [];
+    const file: File = event.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const parsed = parseAngelCsv(e.target?.result as string);
+            if (parsed.length === 0) { angelCsvImportError.value = "No valid rows found. Check the CSV format."; return; }
+            angelCsvRows.value = parsed;
+            angelCsvPreview.value = parsed.slice(0, 5);
+        } catch (err: any) { angelCsvImportError.value = `Parse error: ${err?.message ?? err}`; }
+    };
+    reader.readAsText(file);
+}
+
+async function importAngelCsv() {
+    angelCsvImporting.value = true;
+    angelCsvImportError.value = null;
+    try {
+        const result = await invokeBrokerCsvImport("angel_one", "Angel One", angelCsvRows.value);
+        angelCsvImportResult.value = result;
+        track("angel_one_csv_import_completed", { imported: result.imported, skipped: result.skipped });
+    } catch (e: any) {
+        angelCsvImportError.value = String(e?.message ?? e);
+    } finally {
+        angelCsvImporting.value = false;
+    }
+}
+
+// ── Groww CSV ───────────────────────────────────────────────────
+const growwRows = ref<BrokerCsvRow[]>([]);
+const growwPreview = ref<BrokerCsvRow[]>([]);
+const growwImporting = ref(false);
+const growwImportResult = ref<ImportResult | null>(null);
+const growwError = ref<string | null>(null);
+
+function parseGrowwCsv(text: string): BrokerCsvRow[] {
+    const parsed = parseCsvHeaders(text);
+    if (!parsed) return [];
+    const { lines, col, splitRow } = parsed;
+    const symbolIdx = col(['symbol', 'ticker', 'scrip']);
+    const isinIdx = col(['isin']);
+    const qtyIdx = col(['qty', 'quantity']);
+    const avgIdx = col(['avg_price', 'avg_cost', 'average_price', 'buy_price']);
+    const ltpIdx = col(['ltp', 'current_price', 'cmp']);
+    const exchIdx = col(['exchange', 'exch']);
+    if (symbolIdx < 0 || qtyIdx < 0 || avgIdx < 0) return [];
+    return lines.slice(1).map(line => {
+        const cols = splitRow(line);
+        return {
+            symbol: cols[symbolIdx] ?? '',
+            isin: isinIdx >= 0 ? cols[isinIdx] : undefined,
+            quantity: parseFloat(cols[qtyIdx]) || 0,
+            avgPrice: parseFloat(cols[avgIdx]) || 0,
+            ltp: ltpIdx >= 0 ? parseFloat(cols[ltpIdx]) || undefined : undefined,
             exchange: exchIdx >= 0 ? cols[exchIdx] : undefined,
         };
     }).filter(r => r.symbol && r.quantity > 0 && r.avgPrice > 0);
@@ -109,17 +378,11 @@ function onGrowwFile(event: any) {
     const reader = new FileReader();
     reader.onload = (e) => {
         try {
-            const text = e.target?.result as string;
-            const parsed = parseGrowwCsv(text);
-            if (parsed.length === 0) {
-                growwError.value = "No valid rows found. Check the CSV format.";
-                return;
-            }
+            const parsed = parseGrowwCsv(e.target?.result as string);
+            if (parsed.length === 0) { growwError.value = "No valid rows found. Check the CSV format."; return; }
             growwRows.value = parsed;
             growwPreview.value = parsed.slice(0, 5);
-        } catch (err: any) {
-            growwError.value = `Parse error: ${err?.message ?? err}`;
-        }
+        } catch (err: any) { growwError.value = `Parse error: ${err?.message ?? err}`; }
     };
     reader.readAsText(file);
 }
@@ -128,16 +391,7 @@ async function importGroww() {
     growwImporting.value = true;
     growwError.value = null;
     try {
-        const result = await invoke<{ imported: number; skipped: number }>("import_groww_csv", {
-            rows: growwRows.value.map(r => ({
-                symbol: r.symbol,
-                isin: r.isin,
-                quantity: r.quantity,
-                avgPrice: r.avgPrice,
-                ltp: r.ltp,
-                exchange: r.exchange,
-            })),
-        });
+        const result = await invokeBrokerCsvImport("groww", "Groww", growwRows.value);
         growwImportResult.value = result;
         track("groww_import_completed", { imported: result.imported, skipped: result.skipped });
     } catch (e: any) {
@@ -399,6 +653,41 @@ function formatTime(iso: string | null): string {
                         <li v-for="err in zerodha.syncResult.errors" :key="err">{{ err }}</li>
                     </ul>
                 </template>
+
+                <!-- CSV import toggle -->
+                <div class="csv-divider" />
+                <button class="csv-toggle" @click="zerodhaShowCsv = !zerodhaShowCsv">
+                    <i :class="zerodhaShowCsv ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
+                    Or import from CSV
+                </button>
+                <div v-if="zerodhaShowCsv" class="csv-import-section">
+                    <p class="reconnect-desc" style="margin:0 0 0.75rem">
+                        Go to <strong>console.zerodha.com</strong> → Portfolio → Holdings → Download (XLSX or CSV)
+                    </p>
+                    <div class="setup-form">
+                        <div class="field">
+                            <FileUpload mode="basic" accept=".xlsx,.csv" :maxFileSize="5000000" chooseLabel="Choose XLSX / CSV" customUpload auto @uploader="onZerodhaFile" />
+                        </div>
+                        <template v-if="zerodhaPreview.length > 0">
+                            <p class="reconnect-desc" style="margin:0">Preview (first {{ zerodhaPreview.length }} of {{ zerodhaRows.length }} rows):</p>
+                            <DataTable :value="zerodhaPreview" size="small" class="cas-table">
+                                <Column field="symbol" header="Symbol" style="width:130px" />
+                                <Column field="isin" header="ISIN" style="width:140px" />
+                                <Column field="quantity" header="Qty" style="width:80px" />
+                                <Column header="Avg Price" style="width:100px">
+                                    <template #body="{ data }">₹{{ data.avgPrice.toLocaleString("en-IN", { maximumFractionDigits: 2 }) }}</template>
+                                </Column>
+                                <Column field="exchange" header="Exch" style="width:70px" />
+                            </DataTable>
+                        </template>
+                        <Message v-if="zerodhaImportError" severity="error">{{ zerodhaImportError }}</Message>
+                        <div v-if="zerodhaImportResult" class="refresh-result">
+                            <Tag :value="`✓ ${zerodhaImportResult.imported} holdings imported`" severity="success" />
+                            <Tag v-if="zerodhaImportResult.skipped > 0" :value="`${zerodhaImportResult.skipped} skipped`" severity="secondary" />
+                        </div>
+                        <Button v-if="zerodhaRows.length > 0" :label="`Import ${zerodhaRows.length} Holdings`" icon="pi pi-upload" :loading="zerodhaImporting" @click="importZerodhaCsv" />
+                    </div>
+                </div>
             </div>
         </template>
         <template v-else>
@@ -406,16 +695,51 @@ function formatTime(iso: string | null): string {
                 <h2>Zerodha Kite</h2>
                 <Tag value="Desktop Only" severity="secondary" />
             </div>
-            <div class="zerodha-card desktop-only-notice">
-                <i class="pi pi-desktop desktop-only-icon" />
-                <div class="desktop-only-text">
-                    <span class="reconnect-title">Connect on Desktop</span>
-                    <span class="reconnect-desc">
-                        Zerodha OAuth uses a browser redirect to <code>localhost</code>, which
-                        is not available on Android. Connect on your desktop app, then use
-                        <strong>Settings → Export Sync Backup</strong> to transfer holdings
-                        to this device.
-                    </span>
+            <div class="zerodha-card">
+                <div class="desktop-only-notice">
+                    <i class="pi pi-desktop desktop-only-icon" />
+                    <div class="desktop-only-text">
+                        <span class="reconnect-title">Connect on Desktop</span>
+                        <span class="reconnect-desc">
+                            Zerodha OAuth uses a browser redirect to <code>localhost</code>, which
+                            is not available on Android. Connect on your desktop app, then use
+                            <strong>Settings → Export Sync Backup</strong> to transfer holdings
+                            to this device.
+                        </span>
+                    </div>
+                </div>
+                <div class="csv-divider" />
+                <button class="csv-toggle" @click="zerodhaShowCsv = !zerodhaShowCsv">
+                    <i :class="zerodhaShowCsv ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
+                    Or import from CSV
+                </button>
+                <div v-if="zerodhaShowCsv" class="csv-import-section">
+                    <p class="reconnect-desc" style="margin:0 0 0.75rem">
+                        Go to <strong>console.zerodha.com</strong> → Portfolio → Holdings → Download (XLSX or CSV)
+                    </p>
+                    <div class="setup-form">
+                        <div class="field">
+                            <FileUpload mode="basic" accept=".xlsx,.csv" :maxFileSize="5000000" chooseLabel="Choose XLSX / CSV" customUpload auto @uploader="onZerodhaFile" />
+                        </div>
+                        <template v-if="zerodhaPreview.length > 0">
+                            <p class="reconnect-desc" style="margin:0">Preview (first {{ zerodhaPreview.length }} of {{ zerodhaRows.length }} rows):</p>
+                            <DataTable :value="zerodhaPreview" size="small" class="cas-table">
+                                <Column field="symbol" header="Symbol" style="width:130px" />
+                                <Column field="isin" header="ISIN" style="width:140px" />
+                                <Column field="quantity" header="Qty" style="width:80px" />
+                                <Column header="Avg Price" style="width:100px">
+                                    <template #body="{ data }">₹{{ data.avgPrice.toLocaleString("en-IN", { maximumFractionDigits: 2 }) }}</template>
+                                </Column>
+                                <Column field="exchange" header="Exch" style="width:70px" />
+                            </DataTable>
+                        </template>
+                        <Message v-if="zerodhaImportError" severity="error">{{ zerodhaImportError }}</Message>
+                        <div v-if="zerodhaImportResult" class="refresh-result">
+                            <Tag :value="`✓ ${zerodhaImportResult.imported} holdings imported`" severity="success" />
+                            <Tag v-if="zerodhaImportResult.skipped > 0" :value="`${zerodhaImportResult.skipped} skipped`" severity="secondary" />
+                        </div>
+                        <Button v-if="zerodhaRows.length > 0" :label="`Import ${zerodhaRows.length} Holdings`" icon="pi pi-upload" :loading="zerodhaImporting" @click="importZerodhaCsv" />
+                    </div>
                 </div>
             </div>
         </template>
@@ -518,6 +842,41 @@ function formatTime(iso: string | null): string {
                     </div>
                     <Message v-if="upstox.error" severity="error" class="mt-msg">{{ upstox.error }}</Message>
                 </template>
+
+                <!-- CSV import toggle -->
+                <div class="csv-divider" />
+                <button class="csv-toggle" @click="upstoxShowCsv = !upstoxShowCsv">
+                    <i :class="upstoxShowCsv ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
+                    Or import from CSV
+                </button>
+                <div v-if="upstoxShowCsv" class="csv-import-section">
+                    <p class="reconnect-desc" style="margin:0 0 0.75rem">
+                        Upstox web → <strong>Portfolio</strong> → Holdings → Export
+                    </p>
+                    <div class="setup-form">
+                        <div class="field">
+                            <FileUpload mode="basic" accept=".csv" :maxFileSize="5000000" chooseLabel="Choose CSV" customUpload auto @uploader="onUpstoxFile" />
+                        </div>
+                        <template v-if="upstoxCsvPreview.length > 0">
+                            <p class="reconnect-desc" style="margin:0">Preview (first {{ upstoxCsvPreview.length }} of {{ upstoxCsvRows.length }} rows):</p>
+                            <DataTable :value="upstoxCsvPreview" size="small" class="cas-table">
+                                <Column field="symbol" header="Symbol" style="width:130px" />
+                                <Column field="isin" header="ISIN" style="width:140px" />
+                                <Column field="quantity" header="Qty" style="width:80px" />
+                                <Column header="Avg Price" style="width:100px">
+                                    <template #body="{ data }">₹{{ data.avgPrice.toLocaleString("en-IN", { maximumFractionDigits: 2 }) }}</template>
+                                </Column>
+                                <Column field="exchange" header="Exch" style="width:70px" />
+                            </DataTable>
+                        </template>
+                        <Message v-if="upstoxCsvImportError" severity="error">{{ upstoxCsvImportError }}</Message>
+                        <div v-if="upstoxCsvImportResult" class="refresh-result">
+                            <Tag :value="`✓ ${upstoxCsvImportResult.imported} holdings imported`" severity="success" />
+                            <Tag v-if="upstoxCsvImportResult.skipped > 0" :value="`${upstoxCsvImportResult.skipped} skipped`" severity="secondary" />
+                        </div>
+                        <Button v-if="upstoxCsvRows.length > 0" :label="`Import ${upstoxCsvRows.length} Holdings`" icon="pi pi-upload" :loading="upstoxCsvImporting" @click="importUpstoxCsv" />
+                    </div>
+                </div>
             </div>
         </template>
         <template v-else>
@@ -525,15 +884,50 @@ function formatTime(iso: string | null): string {
                 <h2>Upstox</h2>
                 <Tag value="Desktop Only" severity="secondary" />
             </div>
-            <div class="zerodha-card desktop-only-notice">
-                <i class="pi pi-desktop desktop-only-icon" />
-                <div class="desktop-only-text">
-                    <span class="reconnect-title">Connect on Desktop</span>
-                    <span class="reconnect-desc">
-                        Upstox OAuth uses a browser redirect to <code>localhost</code>, which
-                        is not available on Android. Connect on your desktop app, then sync
-                        holdings via <strong>Settings → Export Sync Backup</strong>.
-                    </span>
+            <div class="zerodha-card">
+                <div class="desktop-only-notice">
+                    <i class="pi pi-desktop desktop-only-icon" />
+                    <div class="desktop-only-text">
+                        <span class="reconnect-title">Connect on Desktop</span>
+                        <span class="reconnect-desc">
+                            Upstox OAuth uses a browser redirect to <code>localhost</code>, which
+                            is not available on Android. Connect on your desktop app, then sync
+                            holdings via <strong>Settings → Export Sync Backup</strong>.
+                        </span>
+                    </div>
+                </div>
+                <div class="csv-divider" />
+                <button class="csv-toggle" @click="upstoxShowCsv = !upstoxShowCsv">
+                    <i :class="upstoxShowCsv ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
+                    Or import from CSV
+                </button>
+                <div v-if="upstoxShowCsv" class="csv-import-section">
+                    <p class="reconnect-desc" style="margin:0 0 0.75rem">
+                        Upstox web → <strong>Portfolio</strong> → Holdings → Export
+                    </p>
+                    <div class="setup-form">
+                        <div class="field">
+                            <FileUpload mode="basic" accept=".csv" :maxFileSize="5000000" chooseLabel="Choose CSV" customUpload auto @uploader="onUpstoxFile" />
+                        </div>
+                        <template v-if="upstoxCsvPreview.length > 0">
+                            <p class="reconnect-desc" style="margin:0">Preview (first {{ upstoxCsvPreview.length }} of {{ upstoxCsvRows.length }} rows):</p>
+                            <DataTable :value="upstoxCsvPreview" size="small" class="cas-table">
+                                <Column field="symbol" header="Symbol" style="width:130px" />
+                                <Column field="isin" header="ISIN" style="width:140px" />
+                                <Column field="quantity" header="Qty" style="width:80px" />
+                                <Column header="Avg Price" style="width:100px">
+                                    <template #body="{ data }">₹{{ data.avgPrice.toLocaleString("en-IN", { maximumFractionDigits: 2 }) }}</template>
+                                </Column>
+                                <Column field="exchange" header="Exch" style="width:70px" />
+                            </DataTable>
+                        </template>
+                        <Message v-if="upstoxCsvImportError" severity="error">{{ upstoxCsvImportError }}</Message>
+                        <div v-if="upstoxCsvImportResult" class="refresh-result">
+                            <Tag :value="`✓ ${upstoxCsvImportResult.imported} holdings imported`" severity="success" />
+                            <Tag v-if="upstoxCsvImportResult.skipped > 0" :value="`${upstoxCsvImportResult.skipped} skipped`" severity="secondary" />
+                        </div>
+                        <Button v-if="upstoxCsvRows.length > 0" :label="`Import ${upstoxCsvRows.length} Holdings`" icon="pi pi-upload" :loading="upstoxCsvImporting" @click="importUpstoxCsv" />
+                    </div>
                 </div>
             </div>
         </template>
@@ -643,6 +1037,41 @@ function formatTime(iso: string | null): string {
                 </div>
                 <Message v-if="angelOne.error" severity="error" class="mt-msg">{{ angelOne.error }}</Message>
             </template>
+
+            <!-- CSV import toggle -->
+            <div class="csv-divider" />
+            <button class="csv-toggle" @click="angelShowCsv = !angelShowCsv">
+                <i :class="angelShowCsv ? 'pi pi-chevron-down' : 'pi pi-chevron-right'" />
+                Or import from CSV
+            </button>
+            <div v-if="angelShowCsv" class="csv-import-section">
+                <p class="reconnect-desc" style="margin:0 0 0.75rem">
+                    Angel One web → <strong>Portfolio</strong> → Holdings → Download
+                </p>
+                <div class="setup-form">
+                    <div class="field">
+                        <FileUpload mode="basic" accept=".csv" :maxFileSize="5000000" chooseLabel="Choose CSV" customUpload auto @uploader="onAngelCsvFile" />
+                    </div>
+                    <template v-if="angelCsvPreview.length > 0">
+                        <p class="reconnect-desc" style="margin:0">Preview (first {{ angelCsvPreview.length }} of {{ angelCsvRows.length }} rows):</p>
+                        <DataTable :value="angelCsvPreview" size="small" class="cas-table">
+                            <Column field="symbol" header="Symbol" style="width:130px" />
+                            <Column field="isin" header="ISIN" style="width:140px" />
+                            <Column field="quantity" header="Qty" style="width:80px" />
+                            <Column header="Avg Price" style="width:100px">
+                                <template #body="{ data }">₹{{ data.avgPrice.toLocaleString("en-IN", { maximumFractionDigits: 2 }) }}</template>
+                            </Column>
+                            <Column field="exchange" header="Exch" style="width:70px" />
+                        </DataTable>
+                    </template>
+                    <Message v-if="angelCsvImportError" severity="error">{{ angelCsvImportError }}</Message>
+                    <div v-if="angelCsvImportResult" class="refresh-result">
+                        <Tag :value="`✓ ${angelCsvImportResult.imported} holdings imported`" severity="success" />
+                        <Tag v-if="angelCsvImportResult.skipped > 0" :value="`${angelCsvImportResult.skipped} skipped`" severity="secondary" />
+                    </div>
+                    <Button v-if="angelCsvRows.length > 0" :label="`Import ${angelCsvRows.length} Holdings`" icon="pi pi-upload" :loading="angelCsvImporting" @click="importAngelCsv" />
+                </div>
+            </div>
         </div>
 
         <!-- ══════════════════════════════════════ Groww CSV Import ══ -->
@@ -1192,10 +1621,25 @@ function formatTime(iso: string | null): string {
 }
 .sync-errors li { margin-bottom: 0.2rem; }
 
+/* Broker CSV import */
+.csv-divider {
+    margin: 1.25rem 0 0.75rem;
+    border-top: 1px solid var(--p-content-border-color);
+}
+.csv-toggle {
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--p-text-muted-color); font-size: 0.83rem;
+    display: flex; align-items: center; gap: 0.4rem;
+    transition: color 0.15s;
+}
+.csv-toggle:hover { color: var(--p-text-color); }
+.csv-toggle i { font-size: 0.7rem; }
+.csv-import-section { margin-top: 0.9rem; }
+
 /* Android desktop-only notice */
 .desktop-only-notice {
     display: flex; align-items: flex-start; gap: 1rem;
-    opacity: 0.85;
+    opacity: 0.85; padding-bottom: 0.25rem;
 }
 .desktop-only-icon {
     font-size: 1.6rem; color: var(--p-text-muted-color); flex-shrink: 0; margin-top: 0.1rem;
