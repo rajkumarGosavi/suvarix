@@ -3,6 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::{timeout, Duration};
 
+use crate::constants::APP_NAME;
 use crate::data_sources::broker::BrokerHolding;
 use crate::error::{AppError, Result};
 
@@ -96,18 +97,16 @@ pub async fn run_oauth_flow(
     let request_str = String::from_utf8_lossy(&buf[..n]);
 
     // Always send a success page before processing, so the browser doesn't hang
-    let success_html = concat!(
-        "HTTP/1.1 200 OK\r\n",
-        "Content-Type: text/html; charset=utf-8\r\n",
-        "Connection: close\r\n",
-        "\r\n",
-        "<!DOCTYPE html><html><head><title>FinFolio — Login successful</title>",
-        "<style>body{font-family:system-ui,sans-serif;text-align:center;padding:3rem;",
-        "background:#0f172a;color:#e2e8f0}h2{color:#10b981}p{color:#94a3b8}</style>",
-        "</head><body><h2>&#10003; Login successful!</h2>",
-        "<p>You can close this tab and return to FinFolio.</p></body></html>"
+    let success_html = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n\
+        <!DOCTYPE html><html><head><title>{APP_NAME} — Login successful</title>\
+        <style>body{{font-family:system-ui,sans-serif;text-align:center;padding:3rem;\
+        background:#0f172a;color:#e2e8f0}}h2{{color:#10b981}}p{{color:#94a3b8}}</style>\
+        </head><body><h2>&#10003; Login successful!</h2>\
+        <p>You can close this tab and return to {APP_NAME}.</p></body></html>"
     );
     let _ = stream.write_all(success_html.as_bytes()).await;
+
 
     let request_token = extract_request_token(&request_str)
         .ok_or_else(|| AppError::ExternalApi("Zerodha did not return a request_token. Check that your redirect URL is set to http://127.0.0.1:7459".into()))?;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { APP_NAME } from "@/constants";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 
@@ -37,7 +38,7 @@ async function submit() {
     <div class="setup-page">
         <div class="setup-card fin-card">
             <div class="setup-logo">
-                <span class="logo-text logo-brand">FinFolio</span>
+                <span class="logo-text logo-brand">{{ APP_NAME }}</span>
                 <p class="tagline">Your finances, on your machine.</p>
             </div>
 

@@ -1,13 +1,13 @@
 [package]
-name = "finfolio"
+name = "suvarix"
 version = "0.3.0"
-description = "FinFolio — Personal Finance Tracker"
+description = "Suvarix — Personal Finance Tracker"
 authors = ["Rajkumar"]
 license = "LicenseRef-Proprietary"
 edition = "2021"
 
 [lib]
-name = "finfolio_lib"
+name = "suvarix_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

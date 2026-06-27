@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+pub mod constants;
 pub mod auth;
 pub mod db;
 pub mod dev_tools;

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { APP_NAME } from "@/constants";
 import { useToast } from "primevue/usetoast";
 import { useNotifications } from "@/composables/useNotifications";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
@@ -20,7 +21,7 @@ export function useGoalCheck() {
         for (const g of hits) {
             const detail = `You've reached your "${g.name}" goal of ${formatCompact(g.targetAmount)}! 🎉`;
             toast.add({ severity: "success", summary: "Goal achieved!", detail, life: 12000 });
-            nativeNotify("FinFolio — Goal achieved!", detail);
+            nativeNotify(`${APP_NAME} — Goal achieved!`, detail);
         }
     }
 

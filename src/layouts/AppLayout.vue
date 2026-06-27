@@ -9,6 +9,7 @@ import { useToast } from "primevue/usetoast";
 import { useRemindersStore } from "@/stores/reminders";
 import { useNotifications } from "@/composables/useNotifications";
 import { useGoalCheck } from "@/composables/useGoalCheck";
+import { APP_NAME } from "@/constants";
 
 const ui = useUiStore();
 const auth = useAuthStore();
@@ -47,7 +48,7 @@ async function checkReminders() {
     if (dueCount > 0) {
         const detail = `${dueCount} recurring transaction${dueCount > 1 ? "s" : ""} due today. Open Reminders to apply.`;
         toast.add({ severity: "warn", summary: "Recurring transactions due", detail, life: 8000 });
-        nativeNotify("FinFolio — Recurring due", detail);
+        nativeNotify(`${APP_NAME} — Recurring due`, detail);
     }
 
     // Check bills, loans, credit cards due today or tomorrow (days=1)
@@ -61,7 +62,7 @@ async function checkReminders() {
         const names = todayBills.map(r => r.name).join(", ");
         const detail = `Due today: ${names}`;
         toast.add({ severity: "danger", summary: "Bills due today", detail, life: 10000 });
-        nativeNotify("FinFolio — Bills due today", detail);
+        nativeNotify(`${APP_NAME} — Bills due today`, detail);
     } else if (tomorrowBills.length > 0) {
         const names = tomorrowBills.map(r => r.name).join(", ");
         toast.add({ severity: "warn", summary: "Bills due tomorrow", detail: names, life: 8000 });
@@ -114,7 +115,7 @@ watch(route, () => { drawerOpen.value = false; });
         <!-- Mobile top bar (hidden on desktop) -->
         <header class="mobile-topbar">
             <Button icon="pi pi-bars" text size="small" @click="drawerOpen = true" aria-label="Open menu" />
-            <span class="brand-name logo-brand">FinFolio</span>
+            <span class="brand-name logo-brand">{{ APP_NAME }}</span>
             <Button icon="pi pi-lock" text size="small" @click="lock" aria-label="Lock app" class="ml-auto" />
         </header>
 
@@ -123,7 +124,7 @@ watch(route, () => { drawerOpen.value = false; });
 
         <nav class="sidebar" :class="{ collapsed: ui.sidebarCollapsed, 'drawer-open': drawerOpen }">
             <div class="sidebar-brand">
-                <span v-if="!ui.sidebarCollapsed" class="brand-name logo-brand">FinFolio</span>
+                <span v-if="!ui.sidebarCollapsed" class="brand-name logo-brand">{{ APP_NAME }}</span>
                 <!-- Desktop: collapse toggle -->
                 <Button
                     :icon="ui.sidebarCollapsed ? 'pi pi-bars' : 'pi pi-times'"

@@ -34,13 +34,13 @@ No frontend test suite. TypeScript strict mode catches most frontend errors at c
 
 ## Architecture
 
-**FinFolio** — offline-first personal finance tracker for Indian investors. All data local (SQLite). No cloud.
+**Suvarix** — offline-first personal finance tracker for Indian investors. All data local (SQLite). No cloud.
 
 ### Data flow
 
 ```
 Vue 3 (src/) ──invoke()──► Tauri IPC ──► Rust commands (src-tauri/src/) ──► SQLite
-                                                                            (APPDATA/finfolio.db)
+                                                                            (APPDATA/suvarix.db)
 ```
 
 Frontend never touches DB directly. All reads/writes go through Tauri `invoke()` calls mapped to `#[tauri::command]` fns in Rust.

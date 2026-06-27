@@ -8,6 +8,7 @@ import { useToast } from "primevue/usetoast";
 import { useUiStore } from "@/stores/ui";
 import type { Theme } from "@/stores/ui";
 import { usePortfolioStore } from "@/stores/portfolio";
+import { APP_NAME } from "@/constants";
 
 // ─── Analytics types ─────────────────────────────────────────
 interface EventStat   { eventName: string; count: number; lastSeen: string; }
@@ -215,8 +216,8 @@ const syncLoading = ref(false);
 
 async function startSyncExport() {
     const dest = await save({
-        defaultPath: `finfolio-sync-${new Date().toISOString().slice(0, 10)}.ffbak`,
-        filters: [{ name: "FinFolio Sync Backup", extensions: ["ffbak"] }],
+        defaultPath: `${APP_NAME.toLowerCase()}-sync-${new Date().toISOString().slice(0, 10)}.svbak`,
+        filters: [{ name: `${APP_NAME} Sync Backup`, extensions: ["svbak"] }],
     });
     if (!dest) return;
     syncPath.value = dest as string;
@@ -235,7 +236,7 @@ async function startSyncImport() {
         accept: async () => {
             const src = await open({
                 multiple: false,
-                filters: [{ name: "FinFolio Sync Backup", extensions: ["ffbak"] }],
+                filters: [{ name: `${APP_NAME} Sync Backup`, extensions: ["svbak"] }],
             });
             if (!src) return;
             syncPath.value = src as string;
@@ -428,7 +429,7 @@ getVersion().then(v => appVersion.value = v);
                 <div class="data-row-info">
                     <span class="data-row-title">Export Sync Backup</span>
                     <span class="data-row-desc">
-                        Save an encrypted <code>.ffbak</code> file to transfer to another device (USB, WhatsApp, etc.).
+                        Save an encrypted <code>.svbak</code> file to transfer to another device (USB, WhatsApp, etc.).
                         Protected by your master password.
                     </span>
                 </div>
@@ -447,7 +448,7 @@ getVersion().then(v => appVersion.value = v);
                 <div class="data-row-info">
                     <span class="data-row-title">Import Sync Backup</span>
                     <span class="data-row-desc">
-                        Load a <code>.ffbak</code> backup from another device. Replaces all current data.
+                        Load a <code>.svbak</code> backup from another device. Replaces all current data.
                         Enter the source device's master password when prompted.
                     </span>
                 </div>
@@ -580,7 +581,7 @@ getVersion().then(v => appVersion.value = v);
             <h2>About</h2>
             <div class="about-grid">
                 <span class="about-label">App</span>
-                <span>FinFolio — Personal Finance Tracker</span>
+                <span>{{ APP_NAME }} — Personal Finance Tracker</span>
                 <span class="about-label">Version</span>
                 <span>{{ appVersion }}</span>
                 <span class="about-label">Data directory</span>

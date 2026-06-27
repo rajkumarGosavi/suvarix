@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { APP_NAME } from "@/constants";
 import { useToast } from "primevue/usetoast";
 import { useNotifications } from "@/composables/useNotifications";
 
@@ -17,7 +18,7 @@ export function useMilestoneCheck() {
                 detail: `Your net worth crossed ${m.label} 🎉`,
                 life: 12000,
             });
-            nativeNotify("FinFolio — Milestone reached!", `Your net worth crossed ${m.label}! 🎉`);
+            nativeNotify(`${APP_NAME} — Milestone reached!`, `Your net worth crossed ${m.label}! 🎉`);
         }
     }
 

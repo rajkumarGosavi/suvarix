@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { APP_NAME } from "@/constants";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useUiStore, type Theme } from "@/stores/ui";
@@ -80,10 +81,10 @@ async function skip() {
             <!-- Step 1: Welcome -->
             <div v-if="step === 1" class="step-content">
                 <div class="step-logo">
-                    <span class="logo-text logo-brand">FinFolio</span>
+                    <span class="logo-text logo-brand">{{ APP_NAME }}</span>
                     <p class="tagline">Your finances, on your machine.</p>
                 </div>
-                <h2>Welcome to FinFolio</h2>
+                <h2>Welcome to {{ APP_NAME }}</h2>
                 <p class="step-desc">
                     Built for Indian investors. Track your stocks, mutual funds, FDs,
                     gold, PPF, and more — all stored locally, with complete privacy.
@@ -125,7 +126,7 @@ async function skip() {
             <!-- Step 3: Features -->
             <div v-else-if="step === 3" class="step-content">
                 <h2>Everything You Need</h2>
-                <p class="step-desc">FinFolio covers every corner of your financial life.</p>
+                <p class="step-desc">{{ APP_NAME }} covers every corner of your financial life.</p>
                 <div class="feature-grid" role="list">
                     <div
                         v-for="f in FEATURES"

@@ -10,6 +10,7 @@ use rand::random;
 use sha2::Sha256;
 use tauri::State;
 
+use crate::constants::APP_NAME;
 use crate::db::DbState;
 use crate::error::{AppError, Result};
 
@@ -154,10 +155,10 @@ pub fn import_sync_backup(
         .map_err(|e| AppError::Database(format!("read backup: {e}")))?;
 
     if data.len() < HEADER_LEN {
-        return Err(AppError::Validation("not a valid FinFolio backup file".into()));
+        return Err(AppError::Validation(format!("not a valid {APP_NAME} backup file")));
     }
     if &data[0..4] != MAGIC {
-        return Err(AppError::Validation("not a valid FinFolio backup file".into()));
+        return Err(AppError::Validation(format!("not a valid {APP_NAME} backup file")));
     }
     if data[4] != FORMAT_VERSION {
         return Err(AppError::Validation(format!("unsupported backup version {}", data[4])));

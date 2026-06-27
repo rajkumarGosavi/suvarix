@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { APP_NAME } from "@/constants";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 
@@ -35,7 +36,7 @@ async function unlock() {
             <div class="lock-icon">
                 <i class="pi pi-lock" style="font-size: 2.5rem; color: var(--p-primary-color)" />
             </div>
-            <h2>FinFolio is Locked</h2>
+            <h2>{{ APP_NAME }} is Locked</h2>
             <p class="hint">Enter your master password to continue.</p>
 
             <form @submit.prevent="unlock" class="unlock-form">
