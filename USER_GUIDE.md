@@ -85,12 +85,12 @@ A doughnut chart showing how your wealth is distributed across asset classes:
 
 Hover over any segment to see the exact amount and percentage.
 
-### Market Pulse
+<!-- ### Market Pulse
 
 Shows live **Nifty 50**, **Sensex**, and **USD/INR** rates.
 
-- Click **Fetch** to pull fresh data from Yahoo Finance.
-- Values show "—" until fetched or when offline.
+- Click **Fetch** to pull fresh market data.
+- Values show "—" until fetched or when offline. -->
 
 ---
 
@@ -492,7 +492,7 @@ Uploading both together gives you the best of both: correct ISINs **and** correc
 
 #### Equity Prices
 
-Click **Refresh Prices** to update the current price for all your equity holdings from Yahoo Finance.
+Click **Refresh Prices** to update the current price for all your equity holdings from market data feed.
 
 - NSE stocks: fetched as `{SYMBOL}.NS`
 - BSE stocks: fetched as `{SYMBOL}.BO`

@@ -47,10 +47,10 @@ Frontend never touches DB directly. All reads/writes go through Tauri `invoke()`
 
 ### Frontend (src/)
 
-- **Pinia stores** (`src/stores/`) — one per domain: `auth`, `portfolio`, `transactions`, `liabilities`, `budget`, `goals`, `prices`, `reminders`, `reports`, `ui`, `analytics`, plus broker stores (`zerodha`, `upstox`, `angel_one`). Stores call `invoke()` and hold reactive state.
+- **Pinia stores** (`src/stores/`) — one per domain: `auth`, `portfolio`, `transactions`, `liabilities`, `budget`, `goals`, `prices`, `reminders`, `reports`, `ui`, `analytics`, `gamification`, plus broker stores (`zerodha`, `upstox`, `angel_one`). Stores call `invoke()` and hold reactive state.
 - **Views** (`src/views/`) — 11 pages routed via Vue Router. Protected routes redirect to `/setup` or `/unlock` if auth not satisfied.
-- **Composables** (`src/composables/`) — shared logic: `useCurrencyFormat` (INR with Cr/L compact), `useDateConvert`, `useHoldingCrud`, `useChartColors`, `useNotifications`, `useAnalytics`.
-- **Components** — one panel component per asset class (EquityPanel, MfPanel, FdPanel, etc.) inside `src/components/portfolio/`.
+- **Composables** (`src/composables/`) — shared logic: `useCurrencyFormat` (INR with Cr/L compact), `useDateConvert`, `useHoldingCrud`, `useChartColors`, `useNotifications`, `useAnalytics`, `useGamification` (XP award, badge checks, confetti celebrations via `canvas-confetti`).
+- **Components** — one panel component per asset class (EquityPanel, MfPanel, FdPanel, etc.) inside `src/components/portfolio/`. `GamificationWidget.vue` renders XP/level/badge progress.
 - **UI** — PrimeVue v4 with auto-import (no manual imports needed). Charts via `vue-chartjs` + Chart.js. Path alias `@/` → `src/`.
 
 ### Backend (src-tauri/src/)
@@ -59,7 +59,7 @@ Modules map 1:1 to domains:
 
 | Module | Responsibility |
 |---|---|
-| `db` | SQLite pool init, WAL mode, 11 migrations (MIGRATION_001–010) |
+| `db` | SQLite pool init, WAL mode, migrations MIGRATION_001–013 (+ MIGRATION_014 behind `gamification` feature flag) |
 | `auth` | Master password (PBKDF2 + salt), AES-GCM encryption for broker creds |
 | `portfolio` | CRUD for 9 asset types + net worth / allocation aggregates |
 | `transactions` | Income/expense ledger |
@@ -73,12 +73,13 @@ Modules map 1:1 to domains:
 | `notifications` | Tauri toast + reminder scheduler |
 | `settings` | App settings, backup/restore/wipe |
 | `analytics` | Local-only event/error/perf logging |
+| `gamification` | XP system, badges, streaks — gated behind `#[cfg(feature = "gamification")]` |
 | `models` | Shared serde structs |
 | `error` | `AppError` via `thiserror` |
 
 ### DB migrations
 
-Numbered files loaded in order at startup by `db::run_migrations()`. Add new migrations as `MIGRATION_0NN` — never edit existing ones.
+Numbered files loaded in order at startup by `db::run_migrations()`. Add new migrations as `MIGRATION_0NN` — never edit existing ones. MIGRATION_010 is wrapped with `let _ =` (ALTER TABLE, not idempotent). MIGRATION_014 is compiled only with `#[cfg(feature = "gamification")]`.
 
 ### Currency formatting
 

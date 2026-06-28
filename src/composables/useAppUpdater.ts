@@ -34,8 +34,8 @@ export function useAppUpdater() {
           }
         },
       })
-    } catch {
-      // network unavailable or running in dev — ignore
+    } catch (e) {
+      console.error('[updater] check failed:', e)
     }
   }
 

@@ -68,7 +68,7 @@ Add holdings manually or import via Zerodha (see Data Sources).
 | ISIN | 12-character identifier |
 | Quantity | Number of shares |
 | Avg Buy Price | Your cost basis per share |
-| Current Price | Auto-refreshed from Yahoo Finance |
+<!-- | Current Price | Auto-refreshed from market data feed | -->
 
 **P&L** = Quantity × (Current Price − Avg Buy Price)
 
