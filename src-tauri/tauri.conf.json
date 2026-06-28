@@ -22,6 +22,14 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJFODNDQjcxRjE5Q0M5NUEKUldSYXlaenhjY3VEdnArZVNETUh6QmMvNEhad0JEbTZ6cUlzNldZcU5MTHp4WFd4MUI2eW81UmkK",
+      "endpoints": [
+        "https://github.com/rajkumarGosavi/suvarix/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
