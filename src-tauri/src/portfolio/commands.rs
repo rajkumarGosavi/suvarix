@@ -435,6 +435,7 @@ pub fn delete_insurance(id: i64, state: State<DbState>) -> Result<()> {
 #[serde(rename_all = "camelCase")]
 pub struct SipSchedule {
     pub id: i64,
+    pub account_id: i64,
     pub mf_holding_id: Option<i64>,
     pub scheme_code: String,
     pub scheme_name: Option<String>,
@@ -449,6 +450,7 @@ pub struct SipSchedule {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddSipPayload {
+    pub account_id: i64,
     pub mf_holding_id: Option<i64>,
     pub scheme_code: String,
     pub amount: f64,
@@ -463,7 +465,7 @@ pub struct AddSipPayload {
 pub fn list_sip_schedules(state: State<DbState>) -> Result<Vec<SipSchedule>> {
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     let mut stmt = conn.prepare(
-        "SELECT s.id, s.mf_holding_id, s.scheme_code, m.scheme_name,
+        "SELECT s.id, s.account_id, s.mf_holding_id, s.scheme_code, m.scheme_name,
                 s.amount, s.frequency, s.debit_day, s.start_date, s.end_date, s.is_active
          FROM sip_schedules s
          LEFT JOIN mf_holdings m ON s.mf_holding_id = m.id
@@ -471,15 +473,16 @@ pub fn list_sip_schedules(state: State<DbState>) -> Result<Vec<SipSchedule>> {
     )?;
     let rows: Vec<_> = stmt.query_map([], |r| Ok(SipSchedule {
         id: r.get(0)?,
-        mf_holding_id: r.get(1)?,
-        scheme_code: r.get(2)?,
-        scheme_name: r.get(3)?,
-        amount: r.get(4)?,
-        frequency: r.get(5)?,
-        debit_day: r.get(6)?,
-        start_date: r.get(7)?,
-        end_date: r.get(8)?,
-        is_active: r.get::<_, i64>(9)? != 0,
+        account_id: r.get(1)?,
+        mf_holding_id: r.get(2)?,
+        scheme_code: r.get(3)?,
+        scheme_name: r.get(4)?,
+        amount: r.get(5)?,
+        frequency: r.get(6)?,
+        debit_day: r.get(7)?,
+        start_date: r.get(8)?,
+        end_date: r.get(9)?,
+        is_active: r.get::<_, i64>(10)? != 0,
     }))?
     .filter_map(|r| r.ok())
     .collect();
@@ -490,11 +493,11 @@ pub fn list_sip_schedules(state: State<DbState>) -> Result<Vec<SipSchedule>> {
 pub fn add_sip_schedule(payload: AddSipPayload, state: State<DbState>) -> Result<i64> {
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     conn.execute(
-        "INSERT INTO sip_schedules (mf_holding_id, scheme_code, amount, frequency,
+        "INSERT INTO sip_schedules (account_id, mf_holding_id, scheme_code, amount, frequency,
          debit_day, start_date, end_date, is_active)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         rusqlite::params![
-            payload.mf_holding_id, payload.scheme_code, payload.amount,
+            payload.account_id, payload.mf_holding_id, payload.scheme_code, payload.amount,
             payload.frequency, payload.debit_day, payload.start_date,
             payload.end_date, payload.is_active as i64
         ],
@@ -506,11 +509,11 @@ pub fn add_sip_schedule(payload: AddSipPayload, state: State<DbState>) -> Result
 pub fn update_sip_schedule(id: i64, payload: AddSipPayload, state: State<DbState>) -> Result<()> {
     let conn = state.0.lock().map_err(|_| AppError::Database("lock error".into()))?;
     conn.execute(
-        "UPDATE sip_schedules SET mf_holding_id=?1, scheme_code=?2, amount=?3,
-         frequency=?4, debit_day=?5, start_date=?6, end_date=?7, is_active=?8
-         WHERE id=?9",
+        "UPDATE sip_schedules SET account_id=?1, mf_holding_id=?2, scheme_code=?3, amount=?4,
+         frequency=?5, debit_day=?6, start_date=?7, end_date=?8, is_active=?9
+         WHERE id=?10",
         rusqlite::params![
-            payload.mf_holding_id, payload.scheme_code, payload.amount,
+            payload.account_id, payload.mf_holding_id, payload.scheme_code, payload.amount,
             payload.frequency, payload.debit_day, payload.start_date,
             payload.end_date, payload.is_active as i64, id
         ],

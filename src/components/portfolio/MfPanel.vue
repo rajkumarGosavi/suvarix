@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { useConfirm } from "primevue/useconfirm";
+import { useToast } from "primevue/usetoast";
 import { usePortfolioStore } from "@/stores/portfolio";
 import { useHoldingCrud } from "@/composables/useHoldingCrud";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
@@ -9,6 +10,7 @@ import { strToDate, dateToStr } from "@/composables/useDateConvert";
 
 const portfolio = usePortfolioStore();
 const confirm = useConfirm();
+const toast = useToast();
 const { formatINR, formatPercent } = useCurrencyFormat();
 const { showDialog, editItem, loading, openAdd, openEdit, close, save, remove } =
     useHoldingCrud("add_mf", "update_mf", "delete_mf", portfolio.fetchMf.bind(portfolio));
@@ -42,6 +44,7 @@ const FREQUENCIES = ["monthly", "quarterly", "weekly"];
 
 interface SipSchedule {
     id: number;
+    accountId: number;
     mfHoldingId: number | null;
     schemeCode: string;
     schemeName: string | null;
@@ -54,6 +57,7 @@ interface SipSchedule {
 }
 
 interface SipForm {
+    accountId: number | null;
     mfHoldingId: number | null;
     schemeCode: string;
     amount: number;
@@ -71,7 +75,7 @@ const editSip = ref<SipSchedule | null>(null);
 const sipFormLoading = ref(false);
 
 const sipForm = reactive<SipForm>({
-    mfHoldingId: null, schemeCode: "", amount: 0,
+    accountId: null, mfHoldingId: null, schemeCode: "", amount: 0,
     frequency: "monthly", debitDay: 1,
     startDate: null, endDate: null, isActive: true,
 });
@@ -84,10 +88,27 @@ async function fetchSips() {
 
 function resetSipForm() {
     Object.assign(sipForm, {
-        mfHoldingId: null, schemeCode: "", amount: 0,
+        accountId: null, mfHoldingId: null, schemeCode: "", amount: 0,
         frequency: "monthly", debitDay: 1,
         startDate: new Date(), endDate: null, isActive: true,
     });
+}
+
+const mfHoldingOptions = computed(() =>
+    portfolio.mf.map((h: any) => ({
+        label: h.schemeName ?? h.schemeCode,
+        value: h.id,
+        accountId: h.accountId,
+        schemeCode: h.schemeCode,
+    }))
+);
+
+function onHoldingSelect(holdingId: number | null) {
+    const h = mfHoldingOptions.value.find(o => o.value === holdingId);
+    if (h) {
+        sipForm.accountId = h.accountId;
+        if (!sipForm.schemeCode) sipForm.schemeCode = h.schemeCode;
+    }
 }
 
 function openAddSip() {
@@ -99,6 +120,7 @@ function openAddSip() {
 function openEditSip(item: SipSchedule) {
     editSip.value = item;
     Object.assign(sipForm, {
+        accountId: item.accountId,
         mfHoldingId: item.mfHoldingId,
         schemeCode: item.schemeCode,
         amount: item.amount,
@@ -112,9 +134,14 @@ function openEditSip(item: SipSchedule) {
 }
 
 async function submitSip() {
+    if (!sipForm.accountId) {
+        toast.add({ severity: "warn", summary: "Select a holding", detail: "Pick an MF holding to link this SIP to an account.", life: 4000 });
+        return;
+    }
     sipFormLoading.value = true;
     try {
         const payload = {
+            accountId: sipForm.accountId,
             mfHoldingId: sipForm.mfHoldingId,
             schemeCode: sipForm.schemeCode,
             amount: sipForm.amount,
@@ -131,6 +158,8 @@ async function submitSip() {
         }
         showSipDialog.value = false;
         await fetchSips();
+    } catch (e: any) {
+        toast.add({ severity: "error", summary: "Failed to save SIP", detail: String(e), life: 5000 });
     } finally {
         sipFormLoading.value = false;
     }
@@ -303,6 +332,18 @@ onMounted(() => {
     <!-- SIP Dialog -->
     <Dialog v-model:visible="showSipDialog" :header="editSip ? 'Edit SIP' : 'Add SIP'" modal style="width:480px">
         <form @submit.prevent="submitSip" class="dialog-form">
+            <div class="field">
+                <label>Linked MF Holding *</label>
+                <Select
+                    v-model="sipForm.mfHoldingId"
+                    :options="mfHoldingOptions"
+                    optionLabel="label"
+                    optionValue="value"
+                    placeholder="Select a holding"
+                    class="w-full"
+                    @change="onHoldingSelect(sipForm.mfHoldingId)"
+                />
+            </div>
             <div class="field">
                 <label>Scheme Name / Code *</label>
                 <InputText v-model="sipForm.schemeCode" placeholder="e.g. Mirae Asset Large Cap or scheme code" class="w-full" required />
