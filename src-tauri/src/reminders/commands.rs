@@ -81,6 +81,20 @@ pub struct UpcomingReminder {
     pub days_until_due: i64,
 }
 
+// ── Maturity alert aggregate ──────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaturityAlert {
+    pub source: String,               // "fd" | "bond"
+    pub source_id: i64,
+    pub name: String,
+    pub principal: f64,               // principal (FD) or face_value * quantity (bond)
+    pub maturity_date: String,        // YYYY-MM-DD
+    pub maturity_amount: Option<f64>, // FD only; None for bonds
+    pub days_until_maturity: i64,     // negative = already matured
+}
+
 // ── Helper ────────────────────────────────────────────────────────────────────
 
 fn advance_date(date: NaiveDate, frequency: &str) -> NaiveDate {
@@ -713,6 +727,113 @@ pub fn get_calendar_events(year: i32, month: u32, state: State<DbState>) -> Resu
         }
     }
 
+    // ── FD Holdings: emit maturity dates in [first_day, last_day] ────────────
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, bank_name, principal, maturity_date, maturity_amount
+             FROM fd_holdings
+             WHERE maturity_date >= ?1 AND maturity_date <= ?2",
+        )?;
+        for row in stmt.query_map(
+            [first_day.format("%Y-%m-%d").to_string(), last_day.format("%Y-%m-%d").to_string()],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?,
+                    r.get::<_, String>(3)?, r.get::<_, Option<f64>>(4)?)),
+        )?.flatten() {
+            let (id, bank_name, principal, maturity_date, maturity_amount) = row;
+            if let Ok(date) = NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d") {
+                events.push(CalendarEvent {
+                    date: maturity_date,
+                    event_type: "fd_maturity".into(),
+                    source_id: id,
+                    name: format!("{} FD Maturity", bank_name),
+                    amount: maturity_amount.unwrap_or(principal),
+                    category: "Fixed Deposit".into(),
+                    is_overdue: date < today,
+                });
+            }
+        }
+    }
+
+    // ── Bond Holdings: emit maturity dates in [first_day, last_day] ──────────
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, issuer_name, face_value * quantity, maturity_date
+             FROM bond_holdings
+             WHERE maturity_date IS NOT NULL
+               AND maturity_date >= ?1 AND maturity_date <= ?2",
+        )?;
+        for row in stmt.query_map(
+            [first_day.format("%Y-%m-%d").to_string(), last_day.format("%Y-%m-%d").to_string()],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?, r.get::<_, String>(3)?)),
+        )?.flatten() {
+            let (id, issuer_name, investment, maturity_date) = row;
+            if let Ok(date) = NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d") {
+                events.push(CalendarEvent {
+                    date: maturity_date,
+                    event_type: "bond_maturity".into(),
+                    source_id: id,
+                    name: format!("{} Bond Maturity", issuer_name),
+                    amount: investment,
+                    category: "Bond".into(),
+                    is_overdue: date < today,
+                });
+            }
+        }
+    }
+
     events.sort_by(|a, b| a.date.cmp(&b.date));
     Ok(events)
+}
+
+#[tauri::command]
+pub fn get_maturity_alerts(days: i64, state: State<DbState>) -> Result<Vec<MaturityAlert>> {
+    let conn = state.0.get()?;
+    let mut alerts: Vec<MaturityAlert> = vec![];
+
+    // FDs — maturity_date NOT NULL (indexed via idx_fd_maturity)
+    let mut stmt = conn.prepare(
+        "SELECT id, bank_name, principal, maturity_date, maturity_amount
+         FROM fd_holdings
+         WHERE julianday(maturity_date) - julianday('now') BETWEEN -30 AND ?1
+         ORDER BY maturity_date ASC",
+    )?;
+    for row in stmt.query_map([days], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?,
+            r.get::<_, String>(3)?, r.get::<_, Option<f64>>(4)?))
+    })?.flatten() {
+        let (id, name, principal, maturity_date, maturity_amount) = row;
+        let days_until = NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d")
+            .map(|d| (d - Local::now().date_naive()).num_days())
+            .unwrap_or(0);
+        alerts.push(MaturityAlert {
+            source: "fd".into(), source_id: id, name, principal,
+            maturity_date, maturity_amount, days_until_maturity: days_until,
+        });
+    }
+
+    // Bonds — maturity_date nullable (perpetual bonds have NULL)
+    let mut stmt = conn.prepare(
+        "SELECT id, issuer_name, face_value * quantity, maturity_date
+         FROM bond_holdings
+         WHERE maturity_date IS NOT NULL
+           AND julianday(maturity_date) - julianday('now') BETWEEN -30 AND ?1
+         ORDER BY maturity_date ASC",
+    )?;
+    for row in stmt.query_map([days], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?,
+            r.get::<_, f64>(2)?, r.get::<_, String>(3)?))
+    })?.flatten() {
+        let (id, name, principal, maturity_date) = row;
+        let days_until = NaiveDate::parse_from_str(&maturity_date, "%Y-%m-%d")
+            .map(|d| (d - Local::now().date_naive()).num_days())
+            .unwrap_or(0);
+        alerts.push(MaturityAlert {
+            source: "bond".into(), source_id: id, name, principal,
+            maturity_date, maturity_amount: None, days_until_maturity: days_until,
+        });
+    }
+
+    alerts.sort_by(|a, b| a.maturity_date.cmp(&b.maturity_date));
+    Ok(alerts)
 }

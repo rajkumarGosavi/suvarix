@@ -116,6 +116,8 @@ const TYPE_CONFIG: Record<string, { severity: string; icon: string; label: strin
     bill:        { severity: "info",      icon: "pi pi-receipt",     label: "Bill" },
     goal:        { severity: "success",   icon: "pi pi-flag",        label: "Goal Target" },
     recurring:   { severity: "secondary", icon: "pi pi-refresh",     label: "Recurring" },
+    fd_maturity:   { severity: "warn",    icon: "pi pi-wallet",      label: "FD Maturity" },
+    bond_maturity: { severity: "info",    icon: "pi pi-percentage",  label: "Bond Maturity" },
 };
 
 function typeConfig(t: string) {
@@ -387,6 +389,8 @@ onMounted(loadEvents);
 .ev-dot--bill        { background: var(--p-blue-500); }
 .ev-dot--goal        { background: var(--p-green-500); }
 .ev-dot--recurring   { background: var(--p-surface-500); }
+.ev-dot--fd_maturity   { background: var(--p-amber-500); }
+.ev-dot--bond_maturity { background: var(--p-purple-500); }
 
 .more-badge {
     font-size: 0.65rem;

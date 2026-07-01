@@ -194,6 +194,7 @@ pub fn run() {
             reminders::commands::add_milestone,
             reminders::commands::delete_milestone,
             reminders::commands::get_calendar_events,
+            reminders::commands::get_maturity_alerts,
             // dev tools (available in all builds; guarded internally)
             dev_tools::is_dev_build,
             dev_tools::is_dummy_data_seeded,

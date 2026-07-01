@@ -9,6 +9,7 @@ import { useToast } from "primevue/usetoast";
 import { useRemindersStore } from "@/stores/reminders";
 import { useNotifications } from "@/composables/useNotifications";
 import { useGoalCheck } from "@/composables/useGoalCheck";
+import { useMaturityCheck } from "@/composables/useMaturityCheck";
 import { APP_NAME } from "@/constants";
 
 const ui = useUiStore();
@@ -20,6 +21,7 @@ const toast = useToast();
 const remindersStore = useRemindersStore();
 const { nativeNotify } = useNotifications();
 const { checkGoals } = useGoalCheck();
+const { checkMaturity } = useMaturityCheck();
 
 function lock() {
     auth.lock();
@@ -71,6 +73,9 @@ async function checkReminders() {
     // Check goal achievements against current net worth
     const nw = await invoke<{ totalAssets: number }>("get_net_worth").catch(() => null);
     if (nw) checkGoals(nw.totalAssets);
+
+    // Check FD/bond maturity alerts (within 30 days or recently matured)
+    await checkMaturity(30);
 }
 
 onMounted(async () => {
