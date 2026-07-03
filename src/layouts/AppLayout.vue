@@ -294,8 +294,9 @@ watch(route, () => { drawerOpen.value = false; });
         display: flex;
         align-items: center;
         gap: 0.5rem;
-        padding: 0 0.75rem;
-        height: 52px;
+        padding: env(safe-area-inset-top, 0px) 0.75rem 0;
+        height: calc(52px + env(safe-area-inset-top, 0px));
+        box-sizing: border-box;
         flex-shrink: 0;
         background: var(--p-content-background);
         border-bottom: 1px solid var(--p-content-border-color);
@@ -311,7 +312,7 @@ watch(route, () => { drawerOpen.value = false; });
     .drawer-backdrop {
         display: block;
         position: fixed;
-        top: 52px;
+        top: calc(52px + env(safe-area-inset-top, 0px));
         left: 0;
         right: 0;
         bottom: 0;
@@ -321,9 +322,9 @@ watch(route, () => { drawerOpen.value = false; });
 
     .sidebar {
         position: fixed;
-        top: 52px;
+        top: calc(52px + env(safe-area-inset-top, 0px));
         left: -240px;
-        height: calc(100% - 52px);
+        height: calc(100% - 52px - env(safe-area-inset-top, 0px));
         width: 240px !important;
         min-width: 240px !important;
         z-index: 200;
