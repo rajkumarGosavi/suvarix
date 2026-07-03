@@ -107,7 +107,7 @@ jobs:
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > src-tauri/gen/android/release.keystore
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
 
       - name: Write keystore.properties
         env:
@@ -117,8 +117,52 @@ jobs:
           cat > src-tauri/gen/android/keystore.properties <<EOF
           password=$ANDROID_KEYSTORE_PASSWORD
           keyAlias=$ANDROID_KEY_ALIAS
-          storeFile=release.keystore
+          storeFile=$RUNNER_TEMP/release.keystore
           EOF
+
+      - name: Wire signingConfig into build.gradle.kts
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          p = pathlib.Path("src-tauri/gen/android/app/build.gradle.kts")
+          src = p.read_text().replace("\r\n", "\n")
+
+          src = src.replace(
+              "import java.util.Properties\n",
+              "import java.util.Properties\nimport java.io.FileInputStream\n",
+              1,
+          )
+
+          signing_block = (
+              '    signingConfigs {\n'
+              '        create("release") {\n'
+              '            val keystorePropertiesFile = rootProject.file("keystore.properties")\n'
+              '            val keystoreProperties = Properties()\n'
+              '            if (keystorePropertiesFile.exists()) {\n'
+              '                keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n'
+              '            }\n'
+              '            keyAlias = keystoreProperties["keyAlias"] as String\n'
+              '            keyPassword = keystoreProperties["password"] as String\n'
+              '            storeFile = file(keystoreProperties["storeFile"] as String)\n'
+              '            storePassword = keystoreProperties["password"] as String\n'
+              '        }\n'
+              '    }\n'
+          )
+          src = src.replace("android {\n", "android {\n" + signing_block, 1)
+
+          src = src.replace(
+              'getByName("release") {\n            isMinifyEnabled = true',
+              'getByName("release") {\n            signingConfig = signingConfigs.getByName("release")\n            isMinifyEnabled = true',
+              1,
+          )
+
+          assert "import java.io.FileInputStream" in src, "FileInputStream import not inserted"
+          assert "signingConfigs {" in src, "signingConfigs block not inserted"
+          assert 'signingConfig = signingConfigs.getByName("release")' in src, "release buildType not wired to signingConfig"
+
+          p.write_text(src)
+          PY
 
       - name: Build signed release APK
         run: pnpm tauri android build --target aarch64 --target x86_64
