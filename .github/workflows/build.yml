@@ -1,29 +1,178 @@
-name: Android Build
+name: Build
 
 on:
-  push:
-    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
-      build_type:
-        description: "Build type"
+      targets:
+        description: "What to build"
         required: true
-        default: debug
+        default: both
+        type: choice
+        options:
+          - desktop
+          - android
+          - both
+      android_build_type:
+        description: "Android build type (ignored if not building android)"
+        required: true
+        default: release
         type: choice
         options:
           - debug
           - release
+      branch:
+        description: "Branch to build from"
+        required: true
+        default: "main"
+        type: string
       tag:
-        description: "Tag for release build (e.g. v0.6.2) — required to publish a GitHub Release; leave blank to only build the APK artifact"
+        description: "Tag (e.g. v0.6.2) — used as desktop release tag and to attach Android release APK; leave blank to skip publishing"
         required: false
         type: string
 
 jobs:
-  build-android:
-    if: github.event_name == 'workflow_dispatch' && inputs.build_type == 'debug'
+  # ---------- Desktop (Tauri) ----------
+  desktop-create-release:
+    if: inputs.targets == 'desktop' || inputs.targets == 'both'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.result }}
+      version: ${{ steps.resolve-version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: resolve version
+        id: resolve-version
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "version=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: create release
+        id: create-release
+        uses: actions/github-script@v6
+        env:
+          RELEASE_TAG: ${{ steps.resolve-version.outputs.version }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `Suvarix ${tag}`,
+              body: `## Suvarix ${tag}\n\n| Platform | File |\n|----------|------|\n| Windows | \`.msi\` installer |\n| macOS ARM | \`.dmg\` (Apple Silicon) |\n| macOS Intel | \`.dmg\` (Intel) |\n| Linux | \`.AppImage\` / \`.deb\` |`,
+              draft: true,
+              prerelease: false,
+              target_commitish: '${{ inputs.branch }}'
+            })
+            return data.id
+
+  desktop-build-tauri:
+    needs: desktop-create-release
+    if: inputs.targets == 'desktop' || inputs.targets == 'both'
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: windows-latest
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust build cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
+
+      - name: install frontend dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.desktop-create-release.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+  desktop-publish-release:
+    if: inputs.targets == 'desktop' || inputs.targets == 'both'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: [desktop-create-release, desktop-build-tauri]
+
+    steps:
+      - name: publish release
+        uses: actions/github-script@v6
+        env:
+          release_id: ${{ needs.desktop-create-release.outputs.release_id }}
+        with:
+          script: |
+            github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: process.env.release_id,
+              draft: false,
+              prerelease: false
+            })
+
+  # ---------- Android ----------
+  android-debug:
+    if: (inputs.targets == 'android' || inputs.targets == 'both') && inputs.android_build_type == 'debug'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -67,11 +216,15 @@ jobs:
           name: suvarix-debug-apk
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
 
-  build-android-release:
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_type == 'release')
+  android-release:
+    if: (inputs.targets == 'android' || inputs.targets == 'both') && inputs.android_build_type == 'release'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -177,8 +330,8 @@ jobs:
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
 
       - name: Attach APK to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+        if: inputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag }}
           files: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
