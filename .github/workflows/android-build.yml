@@ -1,11 +1,8 @@
-name: Android Debug Build
+name: Android Build
 
 on:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       build_type:
@@ -19,7 +16,7 @@ on:
 
 jobs:
   build-android:
-    if: github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug'
+    if: github.event_name == 'workflow_dispatch' && inputs.build_type == 'debug'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
