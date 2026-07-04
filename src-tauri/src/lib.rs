@@ -21,6 +21,8 @@ pub mod goals;
 pub mod reminders;
 #[cfg(feature = "gamification")]
 pub mod gamification;
+#[cfg(test)]
+pub mod test_utils;
 
 use db::DbState;
 

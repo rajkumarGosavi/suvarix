@@ -1,4 +1,4 @@
-.PHONY: setup dev dev-ui build release release-gami test lint clean
+.PHONY: setup dev dev-ui build release release-gami test test-unit test-frontend test-all lint clean
 
 # Install frontend deps
 setup:
@@ -28,9 +28,20 @@ release:
 release-gami:
 	pnpm tauri build -- --features gamification
 
-# Rust unit tests
+# Rust unit tests only (inline #[cfg(test)] modules, no tests/ integration binaries)
+test-unit:
+	cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+# All Rust tests (unit + tests/ integration binaries)
 test:
 	cargo test --manifest-path src-tauri/Cargo.toml
+
+# Frontend unit tests (vitest)
+test-frontend:
+	pnpm test
+
+# Everything: Rust (unit + integration) + frontend
+test-all: test test-frontend
 
 # Rust lint
 lint:

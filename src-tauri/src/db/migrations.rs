@@ -33,6 +33,40 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::test_db_pool;
+
+    #[test]
+    fn run_migrations_is_idempotent_when_rerun_on_same_connection() {
+        // test_db_pool() already runs migrations once via DbPool::initialize.
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        // Re-running against the same already-migrated connection must not error,
+        // despite MIGRATION_010's non-idempotent ALTER TABLE (swallowed internally)
+        // and MIGRATION_012's conditional CHECK-constraint relaxation.
+        run_migrations(&conn).expect("second run_migrations call should be a no-op, not an error");
+
+        let table_count: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
+             ('accounts','equity_holdings','mf_holdings','transactions','loans','app_settings')",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(table_count, 6, "core tables should still exist after a second migration run");
+
+        // app_settings seed rows must not be duplicated (INSERT OR IGNORE / PRIMARY KEY on `key`)
+        let settings_count: i64 = conn.query_row(
+            "SELECT count(*) FROM app_settings WHERE key = 'currency'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(settings_count, 1);
+    }
+}
+
 const MIGRATION_001: &str = "
 CREATE TABLE IF NOT EXISTS accounts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
