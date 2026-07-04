@@ -40,6 +40,7 @@ pub struct AddTransactionPayload {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionFilter {
+    pub r#type: Option<String>,
     pub asset_class: Option<String>,
     pub account_id: Option<i64>,
     pub category: Option<String>,

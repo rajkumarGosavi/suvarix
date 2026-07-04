@@ -14,6 +14,7 @@ pub fn list_transactions(filter: TransactionFilter, state: State<DbState>) -> Re
                 price, category, description, notes, source, external_ref, created_at, updated_at
          FROM transactions WHERE 1=1"
     );
+    if filter.r#type.is_some() { sql.push_str(" AND type=?"); }
     if filter.asset_class.is_some() { sql.push_str(" AND asset_class=?"); }
     if filter.account_id.is_some() { sql.push_str(" AND account_id=?"); }
     if filter.category.is_some() { sql.push_str(" AND category=?"); }
@@ -23,6 +24,7 @@ pub fn list_transactions(filter: TransactionFilter, state: State<DbState>) -> Re
 
     let mut stmt = conn.prepare(&sql)?;
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
+    if let Some(v) = filter.r#type { params.push(Box::new(v)); }
     if let Some(v) = filter.asset_class { params.push(Box::new(v)); }
     if let Some(v) = filter.account_id { params.push(Box::new(v)); }
     if let Some(v) = filter.category { params.push(Box::new(v)); }

@@ -98,7 +98,7 @@ const filterType = ref<string | null>(null);
 function applyFilter() {
     store.fetch({
         dateFrom: dateToStr(filterDateFrom.value) ?? undefined,
-        category: filterType.value ?? undefined,
+        type: filterType.value ?? undefined,
         limit: 100,
     });
 }

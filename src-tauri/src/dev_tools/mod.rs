@@ -172,17 +172,21 @@ pub fn seed_dummy_data(state: State<DbState>) -> Result<()> {
     )?;
 
     // ── Transactions ────────────────────────────────────────────────────────
-    let txns: &[(&str, &str, &str, &str, f64, &str)] = &[
-        ("2025-06-01", "income",   "cash",   "Monthly Salary",              150000.0, "salary"),
-        ("2025-06-05", "expense",  "cash",   "Grocery - BigBasket",           8500.0, "food"),
-        ("2025-06-08", "expense",  "cash",   "Electricity Bill",              2200.0, "utilities"),
-        ("2025-06-10", "buy",      "equity", "Bought RELIANCE × 10",        122500.0, "investment"),
-        ("2025-06-12", "expense",  "cash",   "Restaurant - Swiggy",           1800.0, "food"),
-        ("2025-06-15", "emi",      "loan",   "Home Loan EMI",                35000.0, "housing"),
-        ("2025-06-16", "sip",      "mf",     "SIP – Parag Parikh FCF",        5000.0, "investment"),
-        ("2025-06-20", "expense",  "cash",   "Fuel – Petrol",                 4500.0, "transport"),
-        ("2025-06-22", "dividend", "equity", "INFY Interim Dividend",         1250.0, "investment"),
-        ("2025-06-25", "expense",  "cash",   "Mobile Recharge",                599.0, "utilities"),
+    // Dated relative to today so "This Month" filters still show data after the seed ages.
+    use chrono::{Datelike, Local};
+    let now = Local::now();
+    let ym = |day: u32| format!("{}-{:02}-{:02}", now.year(), now.month(), day);
+    let txns: &[(String, &str, &str, &str, f64, &str)] = &[
+        (ym(1),  "income",   "cash",   "Monthly Salary",              150000.0, "salary"),
+        (ym(5),  "expense",  "cash",   "Grocery - BigBasket",           8500.0, "food"),
+        (ym(8),  "expense",  "cash",   "Electricity Bill",              2200.0, "utilities"),
+        (ym(10), "buy",      "equity", "Bought RELIANCE × 10",        122500.0, "investment"),
+        (ym(12), "expense",  "cash",   "Restaurant - Swiggy",           1800.0, "food"),
+        (ym(15), "emi",      "loan",   "Home Loan EMI",                35000.0, "housing"),
+        (ym(16), "sip",      "mf",     "SIP – Parag Parikh FCF",        5000.0, "investment"),
+        (ym(20), "expense",  "cash",   "Fuel – Petrol",                 4500.0, "transport"),
+        (ym(22), "dividend", "equity", "INFY Interim Dividend",         1250.0, "investment"),
+        (ym(25), "expense",  "cash",   "Mobile Recharge",                599.0, "utilities"),
     ];
     for (date, txn_type, asset_class, desc, amount, category) in txns {
         conn.execute(

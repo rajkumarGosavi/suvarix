@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface TransactionFilter {
+    type?: string;
     assetClass?: string;
     accountId?: number;
     category?: string;
