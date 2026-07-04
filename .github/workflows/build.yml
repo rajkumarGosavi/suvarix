@@ -208,6 +208,30 @@ jobs:
       - name: Generate Android project skeleton
         run: pnpm tauri android init
 
+      - name: Set APK output file name
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          p = pathlib.Path("src-tauri/gen/android/app/build.gradle.kts")
+          src = p.read_text().replace("\r\n", "\n")
+
+          output_block = (
+              '    applicationVariants.all {\n'
+              '        outputs\n'
+              '            .map { it as com.android.build.gradle.internal.api.BaseVariantOutputImpl }\n'
+              '            .forEach { output ->\n'
+              '                output.outputFileName = "suvarix-${baseName}.apk"\n'
+              '            }\n'
+              '    }\n'
+          )
+          src = src.replace("android {\n", "android {\n" + output_block, 1)
+
+          assert "applicationVariants.all {" in src, "applicationVariants block not inserted"
+
+          p.write_text(src)
+          PY
+
       - name: Build Android debug APK
         run: pnpm tauri android build --debug --target x86_64
 
@@ -314,9 +338,21 @@ jobs:
               1,
           )
 
+          output_block = (
+              '    applicationVariants.all {\n'
+              '        outputs\n'
+              '            .map { it as com.android.build.gradle.internal.api.BaseVariantOutputImpl }\n'
+              '            .forEach { output ->\n'
+              '                output.outputFileName = "suvarix-${baseName}.apk"\n'
+              '            }\n'
+              '    }\n'
+          )
+          src = src.replace("android {\n", "android {\n" + output_block, 1)
+
           assert "import java.io.FileInputStream" in src, "FileInputStream import not inserted"
           assert "signingConfigs {" in src, "signingConfigs block not inserted"
           assert 'signingConfig = signingConfigs.getByName("release")' in src, "release buildType not wired to signingConfig"
+          assert "applicationVariants.all {" in src, "applicationVariants block not inserted"
 
           p.write_text(src)
           PY
