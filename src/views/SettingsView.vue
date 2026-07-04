@@ -8,6 +8,8 @@ import { useToast } from "primevue/usetoast";
 import { useUiStore } from "@/stores/ui";
 import type { Theme } from "@/stores/ui";
 import { usePortfolioStore } from "@/stores/portfolio";
+import { useBudgetStore } from "@/stores/budget";
+import { useRemindersStore } from "@/stores/reminders";
 import { APP_NAME } from "@/constants";
 import { useAnalytics } from "@/composables/useAnalytics";
 
@@ -19,6 +21,8 @@ interface AnalyticsExport { exportedAt: string; appVersion: string; events: Even
 
 const ui = useUiStore();
 const portfolio = usePortfolioStore();
+const budget = useBudgetStore();
+const reminders = useRemindersStore();
 const { trackError } = useAnalytics();
 
 // ─── Appearance ──────────────────────────────────────────────
@@ -288,12 +292,24 @@ async function toggleDummyData(val: boolean) {
         if (val) {
             await invoke("seed_dummy_data");
             dummyDataEnabled.value = true;
-            await portfolio.fetchAll();
-            toast.add({ severity: "success", summary: "Dummy data loaded", detail: "Portfolio refreshed with demo records.", life: 4000 });
+            await Promise.all([
+                portfolio.fetchAll(),
+                budget.fetchAll(),
+                reminders.fetchBills(),
+                reminders.fetchRecurring(),
+                reminders.loadUpcoming(30),
+            ]);
+            toast.add({ severity: "success", summary: "Dummy data loaded", detail: "Portfolio, budgets and reminders refreshed.", life: 4000 });
         } else {
             await invoke("clear_dummy_data");
             dummyDataEnabled.value = false;
-            await portfolio.fetchAll();
+            await Promise.all([
+                portfolio.fetchAll(),
+                budget.fetchAll(),
+                reminders.fetchBills(),
+                reminders.fetchRecurring(),
+                reminders.loadUpcoming(30),
+            ]);
             toast.add({ severity: "info", summary: "Dummy data cleared", detail: "All demo records removed.", life: 3000 });
         }
     } catch (e: any) {

@@ -221,6 +221,120 @@ pub fn seed_dummy_data(state: State<DbState>) -> Result<()> {
         )?;
     }
 
+    // ── Transactions — multi-month history for trend chart ──────────────────
+    // Jan–May 2025 (June already seeded above); all linked to bank_id → cleared with account delete
+    let monthly_txns: &[(&str, &str, &str, f64, &str)] = &[
+        // Jan 2025
+        ("2025-01-01", "income",  "Salary – January",     150000.0, "salary"),
+        ("2025-01-06", "expense", "Grocery",                 8200.0, "food"),
+        ("2025-01-08", "expense", "Electricity Bill",        2100.0, "utilities"),
+        ("2025-01-10", "expense", "Rent",                   18000.0, "rent"),
+        ("2025-01-15", "emi",     "Home Loan EMI",          35000.0, "housing"),
+        ("2025-01-18", "expense", "Fuel",                    3800.0, "transport"),
+        ("2025-01-22", "expense", "OTT Subscriptions",       1248.0, "entertainment"),
+        ("2025-01-25", "expense", "Mobile Recharge",          599.0, "utilities"),
+        // Feb 2025
+        ("2025-02-01", "income",  "Salary – February",    150000.0, "salary"),
+        ("2025-02-05", "expense", "Grocery",                 9100.0, "food"),
+        ("2025-02-08", "expense", "Electricity Bill",        1980.0, "utilities"),
+        ("2025-02-10", "expense", "Rent",                   18000.0, "rent"),
+        ("2025-02-15", "emi",     "Home Loan EMI",          35000.0, "housing"),
+        ("2025-02-17", "expense", "Medical – Pharmacy",      3200.0, "medical"),
+        ("2025-02-20", "expense", "Restaurant",              2400.0, "food"),
+        ("2025-02-25", "expense", "Mobile Recharge",          599.0, "utilities"),
+        // Mar 2025
+        ("2025-03-01", "income",  "Salary – March",       155000.0, "salary"),
+        ("2025-03-05", "expense", "Grocery",                 8800.0, "food"),
+        ("2025-03-08", "expense", "Electricity Bill",        2300.0, "utilities"),
+        ("2025-03-10", "expense", "Rent",                   18000.0, "rent"),
+        ("2025-03-12", "income",  "Freelance Project",      25000.0, "freelance"),
+        ("2025-03-15", "emi",     "Home Loan EMI",          35000.0, "housing"),
+        ("2025-03-20", "expense", "Fuel",                    4100.0, "transport"),
+        ("2025-03-28", "expense", "Shopping",               12500.0, "shopping"),
+        // Apr 2025
+        ("2025-04-01", "income",  "Salary – April",       155000.0, "salary"),
+        ("2025-04-05", "expense", "Grocery",                 7900.0, "food"),
+        ("2025-04-08", "expense", "Electricity Bill",        2050.0, "utilities"),
+        ("2025-04-10", "expense", "Rent",                   18000.0, "rent"),
+        ("2025-04-15", "emi",     "Home Loan EMI",          35000.0, "housing"),
+        ("2025-04-18", "expense", "Travel – Goa Trip",      28000.0, "travel"),
+        ("2025-04-25", "expense", "Mobile Recharge",          599.0, "utilities"),
+        ("2025-04-28", "dividend","INFY Dividend",            1500.0, "investment"),
+        // May 2025
+        ("2025-05-01", "income",  "Salary – May",         155000.0, "salary"),
+        ("2025-05-06", "expense", "Grocery",                 8600.0, "food"),
+        ("2025-05-08", "expense", "Electricity Bill",        2450.0, "utilities"),
+        ("2025-05-10", "expense", "Rent",                   18000.0, "rent"),
+        ("2025-05-15", "emi",     "Home Loan EMI",          35000.0, "housing"),
+        ("2025-05-16", "sip",     "SIP – Parag Parikh FCF",  5000.0, "investment"),
+        ("2025-05-20", "expense", "Fuel",                    4200.0, "transport"),
+        ("2025-05-22", "income",  "Interest – SBI FD",       2830.0, "interest"),
+    ];
+    for (date, txn_type, desc, amount, category) in monthly_txns {
+        conn.execute(
+            "INSERT INTO transactions (date, type, asset_class, account_id, amount, description, category, source, external_ref)
+             VALUES (?1, ?2, 'cash', ?3, ?4, ?5, ?6, 'manual', ?7)",
+            rusqlite::params![date, txn_type, bank_id, amount, desc, category, DUMMY_TAG],
+        )?;
+    }
+
+    // ── Bills ────────────────────────────────────────────────────────────────
+    // notes = DUMMY_TAG used as sentinel for clear
+    let bills: &[(&str, &str, f64, &str, &str)] = &[
+        // (name, category, amount, frequency, next_due_date)
+        ("MSEDCL Electricity",         "utilities",   2500.0, "monthly",  "2026-07-15"),
+        ("Jio Fiber Broadband",        "utilities",    999.0, "monthly",  "2026-07-18"),
+        ("Airtel Postpaid – Mobile",   "utilities",    599.0, "monthly",  "2026-07-20"),
+        ("Netflix Subscription",       "subscription", 649.0, "monthly",  "2026-07-10"),
+        ("Amazon Prime",               "subscription", 299.0, "monthly",  "2026-07-12"),
+        ("SBI Home Loan EMI",          "emi",        35000.0, "monthly",  "2026-07-05"),
+        ("HDFC Car Loan EMI",          "emi",        15000.0, "monthly",  "2026-07-05"),
+        ("HDFC Life Term Insurance",   "insurance",  15000.0, "yearly",   "2026-04-01"),
+    ];
+    for (name, category, amount, frequency, next_due_date) in bills {
+        conn.execute(
+            "INSERT INTO bills (name, category, amount, frequency, next_due_date, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![name, category, amount, frequency, next_due_date, DUMMY_TAG],
+        )?;
+    }
+
+    // ── Recurring Transactions ───────────────────────────────────────────────
+    // notes = DUMMY_TAG used as sentinel for clear
+    let recurring: &[(&str, &str, f64, &str, &str, &str, &str)] = &[
+        // (name, type, amount, category, asset_class, frequency, next_due_date)
+        ("Monthly Salary",           "income",   150000.0, "salary",        "cash",   "monthly", "2026-07-01"),
+        ("SIP – Parag Parikh FCF",   "sip",        5000.0, "investment",    "mf",     "monthly", "2026-07-16"),
+        ("SIP – Axis Bluechip",      "sip",        3000.0, "investment",    "mf",     "monthly", "2026-07-10"),
+        ("Rent Payment",             "expense",   18000.0, "rent",          "cash",   "monthly", "2026-07-10"),
+        ("Netflix & OTT",            "expense",    1200.0, "entertainment", "cash",   "monthly", "2026-07-10"),
+        ("Gym Membership",           "expense",    2000.0, "entertainment", "cash",   "monthly", "2026-07-07"),
+        ("SBI Home Loan EMI",        "emi",       35000.0, "housing",       "loan",   "monthly", "2026-07-05"),
+        ("HDFC Car Loan EMI",        "emi",       15000.0, "housing",       "loan",   "monthly", "2026-07-05"),
+    ];
+    for (name, txn_type, amount, category, asset_class, frequency, next_due_date) in recurring {
+        conn.execute(
+            "INSERT INTO recurring_transactions (name, type, amount, category, asset_class, frequency, next_due_date, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![name, txn_type, amount, category, asset_class, frequency, next_due_date, DUMMY_TAG],
+        )?;
+    }
+
+    // ── Budgets ──────────────────────────────────────────────────────────────
+    // INSERT OR IGNORE — no sentinel; generic categories are useful to keep
+    let budgets: &[(&str, f64)] = &[
+        ("food", 12000.0), ("rent", 20000.0), ("utilities", 6000.0),
+        ("transport", 8000.0), ("entertainment", 5000.0), ("shopping", 10000.0),
+        ("medical", 4000.0), ("travel", 20000.0),
+    ];
+    for (category, limit) in budgets {
+        conn.execute(
+            "INSERT OR IGNORE INTO budgets (category, monthly_limit, period, is_active)
+             VALUES (?1, ?2, 'monthly', 1)",
+            rusqlite::params![category, limit],
+        )?;
+    }
+
     // ── Net worth snapshot ───────────────────────────────────────────────────
     conn.execute(
         "INSERT OR IGNORE INTO net_worth_snapshots (snapshot_date, total_assets, total_liabilities, net_worth, breakdown_json)
@@ -266,6 +380,8 @@ pub fn clear_dummy_data(state: State<DbState>) -> Result<()> {
     conn.execute("DELETE FROM insurance_holdings WHERE policy_number = ?1", [DUMMY_TAG])?;
     conn.execute("DELETE FROM loans WHERE account_number = ?1", [DUMMY_TAG])?;
     conn.execute("DELETE FROM credit_cards WHERE last_four = 'DEMO'", [])?;
+    conn.execute("DELETE FROM bills WHERE notes = ?1", [DUMMY_TAG])?;
+    conn.execute("DELETE FROM recurring_transactions WHERE notes = ?1", [DUMMY_TAG])?;
     conn.execute("DELETE FROM goals WHERE notes = ?1", [DUMMY_TAG])?;
     conn.execute("DELETE FROM net_worth_snapshots WHERE breakdown_json LIKE '%\"_dummy\"%'", [])?;
 
