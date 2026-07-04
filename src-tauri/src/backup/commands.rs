@@ -8,7 +8,9 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use pbkdf2::pbkdf2_hmac;
 use rand::random;
 use sha2::Sha256;
-use tauri::State;
+use std::io::Write as _;
+use tauri::{AppHandle, State};
+use tauri_plugin_fs::{FsExt, OpenOptions};
 
 use crate::constants::APP_NAME;
 use crate::db::DbState;
@@ -92,6 +94,7 @@ struct BackupPayload {
 
 #[tauri::command]
 pub fn export_sync_backup(
+    app: AppHandle,
     dest_path: String,
     password: String,
     state: State<DbState>,
@@ -138,7 +141,7 @@ pub fn export_sync_backup(
     file.extend_from_slice(&nonce_bytes);
     file.extend_from_slice(&ciphertext);
 
-    std::fs::write(&dest_path, &file)
+    write_via_fs(&app, &dest_path, &file)
         .map_err(|e| AppError::Database(format!("write backup: {e}")))?;
 
     Ok(ExportSummary { rows_exported: total_rows, exported_at })
@@ -146,12 +149,15 @@ pub fn export_sync_backup(
 
 #[tauri::command]
 pub fn import_sync_backup(
+    app: AppHandle,
     src_path: String,
     password: String,
     state: State<DbState>,
 ) -> Result<ImportSummary> {
     // Read + validate header
-    let data = std::fs::read(&src_path)
+    let data = app
+        .fs()
+        .read(src_path.parse::<tauri_plugin_fs::FilePath>().unwrap())
         .map_err(|e| AppError::Database(format!("read backup: {e}")))?;
 
     if data.len() < HEADER_LEN {
@@ -218,6 +224,19 @@ pub fn import_sync_backup(
     let _ = conn.execute_batch("PRAGMA foreign_keys = ON");
 
     result
+}
+
+// ── File I/O ──────────────────────────────────────────────────
+// Uses tauri-plugin-fs instead of std::fs because on Android the path
+// picked via the save/open dialog is a content:// SAF URI, which
+// std::fs::write/read cannot open directly.
+
+fn write_via_fs(app: &AppHandle, path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let file_path = path.parse::<tauri_plugin_fs::FilePath>().unwrap();
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    let mut file = app.fs().open(file_path, opts)?;
+    file.write_all(bytes)
 }
 
 // ── Crypto ────────────────────────────────────────────────────

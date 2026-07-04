@@ -9,6 +9,7 @@ import { useUiStore } from "@/stores/ui";
 import type { Theme } from "@/stores/ui";
 import { usePortfolioStore } from "@/stores/portfolio";
 import { APP_NAME } from "@/constants";
+import { useAnalytics } from "@/composables/useAnalytics";
 
 // ─── Analytics types ─────────────────────────────────────────
 interface EventStat   { eventName: string; count: number; lastSeen: string; }
@@ -18,6 +19,7 @@ interface AnalyticsExport { exportedAt: string; appVersion: string; events: Even
 
 const ui = useUiStore();
 const portfolio = usePortfolioStore();
+const { trackError } = useAnalytics();
 
 // ─── Appearance ──────────────────────────────────────────────
 const THEME_OPTIONS: { label: string; value: Theme; icon: string }[] = [
@@ -266,7 +268,9 @@ async function confirmSync() {
             toast.add({ severity: "success", summary: "Import complete", detail: `${r.rowsImported} records across ${r.tablesImported} tables restored. Restart the app to refresh all views.`, life: 8000 });
         }
     } catch (e: any) {
-        toast.add({ severity: "error", summary: syncMode.value === "export" ? "Export failed" : "Import failed", detail: String(e?.message ?? e), life: 6000 });
+        const detail = String(e?.message ?? e);
+        toast.add({ severity: "error", summary: syncMode.value === "export" ? "Export failed" : "Import failed", detail, life: 6000 });
+        trackError(syncMode.value === "export" ? "sync_export_failed" : "sync_import_failed", detail);
     } finally {
         syncLoading.value = false;
         syncPassword.value = "";
@@ -651,8 +655,6 @@ getVersion().then(v => appVersion.value = v);
             />
         </div>
     </Dialog>
-
-    <Toast />
 </template>
 
 <style scoped>
