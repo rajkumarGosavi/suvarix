@@ -120,7 +120,7 @@ watch(route, () => { drawerOpen.value = false; });
         <!-- Mobile top bar (hidden on desktop) -->
         <header class="mobile-topbar">
             <Button icon="pi pi-bars" text size="small" @click="drawerOpen = true" aria-label="Open menu" />
-            <span class="brand-name logo-brand">{{ APP_NAME }}</span>
+            <Logo :show-wordmark="true" :size="24" />
             <Button icon="pi pi-lock" text size="small" @click="lock" aria-label="Lock app" class="ml-auto" />
         </header>
 
@@ -129,7 +129,7 @@ watch(route, () => { drawerOpen.value = false; });
 
         <nav class="sidebar" :class="{ collapsed: ui.sidebarCollapsed, 'drawer-open': drawerOpen }">
             <div class="sidebar-brand">
-                <span v-if="!ui.sidebarCollapsed" class="brand-name logo-brand">{{ APP_NAME }}</span>
+                <Logo :show-wordmark="!ui.sidebarCollapsed" :size="28" />
                 <!-- Desktop: collapse toggle -->
                 <Button
                     :icon="ui.sidebarCollapsed ? 'pi pi-bars' : 'pi pi-times'"
@@ -262,6 +262,23 @@ watch(route, () => { drawerOpen.value = false; });
 .lock-btn {
     width: 100%;
     justify-content: flex-start;
+}
+
+@media (min-width: 640px) {
+    .sidebar.collapsed .sidebar-brand {
+        flex-direction: column;
+        gap: 0.4rem;
+        padding: 0.75rem 0.5rem;
+    }
+
+    .sidebar.collapsed .toggle-btn {
+        margin-left: 0;
+    }
+
+    .sidebar.collapsed .nav-btn,
+    .sidebar.collapsed .lock-btn {
+        justify-content: center;
+    }
 }
 
 .main-content {
