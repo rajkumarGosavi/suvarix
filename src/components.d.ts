@@ -26,6 +26,8 @@ declare module 'vue' {
     FileUpload: typeof import('primevue/fileupload')['default']
     GamificationWidget: typeof import('./components/GamificationWidget.vue')['default']
     GoldPanel: typeof import('./components/portfolio/GoldPanel.vue')['default']
+    IconField: typeof import('primevue/iconfield')['default']
+    InputIcon: typeof import('primevue/inputicon')['default']
     InputNumber: typeof import('primevue/inputnumber')['default']
     InputText: typeof import('primevue/inputtext')['default']
     InsurancePanel: typeof import('./components/portfolio/InsurancePanel.vue')['default']

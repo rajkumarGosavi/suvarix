@@ -2,6 +2,7 @@ use tauri::State;
 
 use crate::db::DbState;
 use crate::error::{AppError, Result};
+use crate::models::common::ImportResult;
 use super::angel_one;
 use super::broker;
 use super::csv_importer;
@@ -22,12 +23,6 @@ pub struct CasHoldingInput {
     pub amc_name: String,
     pub is_direct: bool,
     pub is_growth: bool,
-}
-
-#[derive(serde::Serialize)]
-pub struct ImportResult {
-    pub imported: i64,
-    pub skipped: i64,
 }
 
 #[tauri::command]

@@ -8,6 +8,9 @@ export interface TransactionFilter {
     category?: string;
     dateFrom?: string;
     dateTo?: string;
+    search?: string;
+    sortBy?: "date" | "amount";
+    sortDir?: "asc" | "desc";
     limit?: number;
     offset?: number;
 }
@@ -15,6 +18,7 @@ export interface TransactionFilter {
 export const useTransactionsStore = defineStore("transactions", {
     state: () => ({
         transactions: [] as any[],
+        totalCount: 0,
         isLoading: false,
         filter: {} as TransactionFilter,
     }),
@@ -24,7 +28,12 @@ export const useTransactionsStore = defineStore("transactions", {
             this.isLoading = true;
             try {
                 this.filter = filter;
-                this.transactions = await invoke("list_transactions", { filter });
+                const [transactions, totalCount] = await Promise.all([
+                    invoke<any[]>("list_transactions", { filter }),
+                    invoke<number>("count_transactions", { filter }),
+                ]);
+                this.transactions = transactions;
+                this.totalCount = totalCount;
             } finally {
                 this.isLoading = false;
             }

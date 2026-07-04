@@ -1,6 +1,6 @@
 [package]
 name = "suvarix"
-version = "0.6.4"
+version = "0.6.5"
 description = "Suvarix — Personal Finance Tracker"
 authors = ["Rajkumar"]
 license = "LicenseRef-Proprietary"

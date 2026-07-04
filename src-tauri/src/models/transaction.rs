@@ -46,6 +46,12 @@ pub struct TransactionFilter {
     pub category: Option<String>,
     pub date_from: Option<String>,
     pub date_to: Option<String>,
+    /// Free-text match against description OR category (case-insensitive substring).
+    pub search: Option<String>,
+    /// "date" (default) or "amount".
+    pub sort_by: Option<String>,
+    /// "asc" or "desc" (default "desc").
+    pub sort_dir: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }

@@ -3,36 +3,55 @@ use crate::db::DbState;
 use crate::error::Result;
 use crate::models::transaction::{AddTransactionPayload, Transaction, TransactionFilter};
 
+/// Builds the shared "WHERE ..." clause + bound params for a TransactionFilter,
+/// used by both `list_transactions` and `count_transactions` so the two stay in sync.
+fn filter_where_clause(filter: &TransactionFilter) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let mut sql = String::from(" WHERE 1=1");
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
+    if let Some(v) = filter.r#type.clone() { sql.push_str(" AND type=?"); params.push(Box::new(v)); }
+    if let Some(v) = filter.asset_class.clone() { sql.push_str(" AND asset_class=?"); params.push(Box::new(v)); }
+    if let Some(v) = filter.account_id { sql.push_str(" AND account_id=?"); params.push(Box::new(v)); }
+    if let Some(v) = filter.category.clone() { sql.push_str(" AND category=?"); params.push(Box::new(v)); }
+    if let Some(v) = filter.date_from.clone() { sql.push_str(" AND date>=?"); params.push(Box::new(v)); }
+    if let Some(v) = filter.date_to.clone() { sql.push_str(" AND date<=?"); params.push(Box::new(v)); }
+    if let Some(v) = filter.search.clone().filter(|s| !s.trim().is_empty()) {
+        sql.push_str(" AND (description LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\')");
+        let pattern = format!("%{}%", v.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+        params.push(Box::new(pattern.clone()));
+        params.push(Box::new(pattern));
+    }
+    (sql, params)
+}
+
+/// Whitelisted ORDER BY clause — never interpolate the filter's sort fields directly into SQL.
+fn order_by_clause(filter: &TransactionFilter) -> &'static str {
+    let desc = filter.sort_dir.as_deref() != Some("asc");
+    match (filter.sort_by.as_deref(), desc) {
+        (Some("amount"), true)  => " ORDER BY amount DESC",
+        (Some("amount"), false) => " ORDER BY amount ASC",
+        (_, true)               => " ORDER BY date DESC",
+        (_, false)              => " ORDER BY date ASC",
+    }
+}
+
 #[tauri::command]
 pub fn list_transactions(filter: TransactionFilter, state: State<DbState>) -> Result<Vec<Transaction>> {
     let conn = state.0.get()?;
     let limit = filter.limit.unwrap_or(100);
     let offset = filter.offset.unwrap_or(0);
 
-    let mut sql = String::from(
+    let (where_clause, mut params) = filter_where_clause(&filter);
+    let sql = format!(
         "SELECT id, date, type, asset_class, account_id, holding_id, amount, quantity,
                 price, category, description, notes, source, external_ref, created_at, updated_at
-         FROM transactions WHERE 1=1"
+         FROM transactions{}{} LIMIT ? OFFSET ?",
+        where_clause,
+        order_by_clause(&filter),
     );
-    if filter.r#type.is_some() { sql.push_str(" AND type=?"); }
-    if filter.asset_class.is_some() { sql.push_str(" AND asset_class=?"); }
-    if filter.account_id.is_some() { sql.push_str(" AND account_id=?"); }
-    if filter.category.is_some() { sql.push_str(" AND category=?"); }
-    if filter.date_from.is_some() { sql.push_str(" AND date>=?"); }
-    if filter.date_to.is_some() { sql.push_str(" AND date<=?"); }
-    sql.push_str(" ORDER BY date DESC LIMIT ? OFFSET ?");
-
-    let mut stmt = conn.prepare(&sql)?;
-    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![];
-    if let Some(v) = filter.r#type { params.push(Box::new(v)); }
-    if let Some(v) = filter.asset_class { params.push(Box::new(v)); }
-    if let Some(v) = filter.account_id { params.push(Box::new(v)); }
-    if let Some(v) = filter.category { params.push(Box::new(v)); }
-    if let Some(v) = filter.date_from { params.push(Box::new(v)); }
-    if let Some(v) = filter.date_to { params.push(Box::new(v)); }
     params.push(Box::new(limit));
     params.push(Box::new(offset));
 
+    let mut stmt = conn.prepare(&sql)?;
     let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt.query_map(param_refs.as_slice(), |r| Ok(Transaction {
         id: r.get(0)?, date: r.get(1)?, r#type: r.get(2)?, asset_class: r.get(3)?,
@@ -42,6 +61,18 @@ pub fn list_transactions(filter: TransactionFilter, state: State<DbState>) -> Re
         external_ref: r.get(13)?, created_at: r.get(14)?, updated_at: r.get(15)?,
     }))?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Total count of transactions matching the filter (ignoring limit/offset) — used by the
+/// frontend's lazy DataTable paginator to know how many pages exist.
+#[tauri::command]
+pub fn count_transactions(filter: TransactionFilter, state: State<DbState>) -> Result<i64> {
+    let conn = state.0.get()?;
+    let (where_clause, params) = filter_where_clause(&filter);
+    let sql = format!("SELECT COUNT(*) FROM transactions{}", where_clause);
+    let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let count: i64 = conn.query_row(&sql, param_refs.as_slice(), |r| r.get(0))?;
+    Ok(count)
 }
 
 #[tauri::command]

@@ -65,7 +65,10 @@ pub fn calculate(conn: &Connection, fy: &str, method: &str) -> Result<CapitalGai
         None    => return Ok(CapitalGainsReport { stcg: 0.0, ltcg: 0.0, transactions: vec![] }),
     };
 
-    let parse_date = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap_or(fy_start);
+    let parse_date = |s: &str| {
+        let date_part = s.split_whitespace().next().unwrap_or(s);
+        NaiveDate::parse_from_str(date_part, "%Y-%m-%d").unwrap_or(fy_start)
+    };
 
     // ── All BUY transactions (all time — needed for correct FIFO basis) ────────
     let buys: Vec<TxRow> = {

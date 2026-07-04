@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import * as XLSX from "xlsx";
 import { usePricesStore } from "@/stores/prices";
+import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { useZerodhaStore } from "@/stores/zerodha";
 import { useUpstoxStore } from "@/stores/upstox";
 import { useAngelOneStore } from "@/stores/angel_one";
@@ -16,6 +17,7 @@ const upstox = useUpstoxStore();
 const angelOne = useAngelOneStore();
 const { track } = useAnalytics();
 const toast = useToast();
+const { formatINR } = useCurrencyFormat();
 
 // Zerodha & Upstox use localhost TCP OAuth — not possible on Android
 const isAndroid = /android/i.test(navigator.userAgent);
@@ -293,6 +295,125 @@ async function importHoldingsCsv() {
 
 function brokerDisplayName(b: string): string {
     return ({ zerodha: 'Zerodha', upstox: 'Upstox', angel_one: 'Angel One', groww: 'Groww', generic: 'Generic' } as Record<string, string>)[b] ?? b;
+}
+
+// ── Transaction CSV Import Dialog ────────────────────────────────
+interface CsvPreview { headers: string[]; sampleRows: string[][]; }
+interface TxnCsvMapping {
+    dateCol: number | null;
+    amountCol: number | null;
+    categoryCol: number | null;
+    descriptionCol: number | null;
+    notesCol: number | null;
+}
+interface MappedPreviewRow {
+    date: string; type: string; amount: string; category: string; description: string; notes: string;
+}
+
+const txnCsvOpen = ref(false);
+const txnCsvStep = ref(1);
+const txnCsvPreview = ref<CsvPreview | null>(null);
+const txnCsvRawText = ref('');
+const txnCsvMapping = ref<TxnCsvMapping>({
+    dateCol: null, amountCol: null, categoryCol: null, descriptionCol: null, notesCol: null,
+});
+const txnCsvImporting = ref(false);
+const txnCsvImportResult = ref<ImportResult | null>(null);
+const txnCsvError = ref<string | null>(null);
+
+function txnCsvReset() {
+    txnCsvStep.value = 1;
+    txnCsvPreview.value = null;
+    txnCsvRawText.value = '';
+    txnCsvMapping.value = { dateCol: null, amountCol: null, categoryCol: null, descriptionCol: null, notesCol: null };
+    txnCsvImportResult.value = null;
+    txnCsvError.value = null;
+}
+
+function guessColumnMapping(headers: string[]): TxnCsvMapping {
+    const norm = headers.map(h => h.trim().toLowerCase());
+    const find = (aliases: string[]) => {
+        const idx = norm.findIndex(h => aliases.includes(h));
+        return idx === -1 ? null : idx;
+    };
+    return {
+        dateCol: find(['date', 'datetime', 'txn_date', 'transaction date']),
+        amountCol: find(['amount', 'money', 'value']),
+        categoryCol: find(['category', 'cat']),
+        descriptionCol: find(['description', 'desc', 'note', 'payee', 'narration', 'people']),
+        notesCol: find(['notes', 'memo', 'remarks']),
+    };
+}
+
+async function onTxnCsvFile(event: any) {
+    const file: File = event.files?.[0];
+    if (!file) return;
+    txnCsvError.value = null;
+    txnCsvPreview.value = null;
+    txnCsvRawText.value = '';
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const content = e.target?.result as string;
+        txnCsvRawText.value = content;
+        try {
+            const preview = await invoke<CsvPreview>('preview_transaction_csv', { csvContent: content });
+            if (preview.headers.length === 0) {
+                txnCsvError.value = "No columns found. Check the CSV format.";
+                return;
+            }
+            txnCsvPreview.value = preview;
+            txnCsvMapping.value = guessColumnMapping(preview.headers);
+            txnCsvStep.value = 2;
+        } catch (err: any) {
+            txnCsvError.value = `Parse error: ${err?.message ?? err}`;
+        }
+    };
+    reader.readAsText(file);
+}
+
+const txnCsvMappedPreviewRows = computed<MappedPreviewRow[]>(() => {
+    const preview = txnCsvPreview.value;
+    const m = txnCsvMapping.value;
+    if (!preview || m.dateCol === null || m.amountCol === null) return [];
+    return preview.sampleRows.map(row => {
+        const rawAmount = parseFloat((row[m.amountCol!] ?? '').replace(/,/g, ''));
+        const amount = Number.isFinite(rawAmount) ? rawAmount : 0;
+        return {
+            date: row[m.dateCol!] ?? '',
+            type: amount < 0 ? 'expense' : 'income',
+            amount: formatINR(Math.abs(amount)),
+            category: m.categoryCol !== null ? (row[m.categoryCol] ?? '—') : '—',
+            description: m.descriptionCol !== null ? (row[m.descriptionCol] ?? '—') : '—',
+            notes: m.notesCol !== null ? (row[m.notesCol] ?? '—') : '—',
+        };
+    });
+});
+
+async function importTxnCsv() {
+    const m = txnCsvMapping.value;
+    if (m.dateCol === null || m.amountCol === null) return;
+    txnCsvImporting.value = true;
+    txnCsvError.value = null;
+    try {
+        const result = await invoke<ImportResult>('import_transactions_csv', {
+            csvContent: txnCsvRawText.value,
+            mapping: {
+                dateCol: m.dateCol,
+                amountCol: m.amountCol,
+                categoryCol: m.categoryCol,
+                descriptionCol: m.descriptionCol,
+                notesCol: m.notesCol,
+            },
+        });
+        txnCsvImportResult.value = result;
+        txnCsvStep.value = 4;
+        track('txn_csv_import', { imported: result.imported, skipped: result.skipped });
+    } catch (e: any) {
+        txnCsvError.value = String(e?.message ?? e);
+    } finally {
+        txnCsvImporting.value = false;
+    }
 }
 
 async function saveAndConnect() {
@@ -934,19 +1055,24 @@ function formatTime(iso: string | null): string {
             </div>
         </div>
 
-        <!-- Import — coming soon -->
+        <!-- Import -->
         <div class="section-header">
             <h2>Import</h2>
         </div>
 
         <div class="import-grid">
-            <div class="import-card">
+            <div class="import-card import-card--active">
                 <i class="pi pi-file-excel import-icon" />
                 <span class="import-title">CSV Import</span>
                 <span class="import-desc">
                     Import transactions from any CSV with a column-mapping wizard.
                 </span>
-                <Tag value="Coming Soon" />
+                <Button
+                    label="Import CSV"
+                    icon="pi pi-upload"
+                    size="small"
+                    @click="txnCsvOpen = true"
+                />
             </div>
             <div class="import-card">
                 <i class="pi pi-file-pdf import-icon" />
@@ -1295,6 +1421,145 @@ function formatTime(iso: string | null): string {
             </template>
         </Dialog>
 
+        <!-- Transaction CSV Import dialog -->
+        <Dialog
+            v-model:visible="txnCsvOpen"
+            header="CSV Import"
+            :modal="true"
+            :style="{ width: '720px', maxWidth: '95vw' }"
+            @hide="txnCsvReset"
+        >
+            <!-- Step 1: upload -->
+            <template v-if="txnCsvStep === 1">
+                <p class="cas-hint">
+                    Works with exports from MoneyWallet and most expense trackers — upload any
+                    transactions CSV and you'll map its columns to Date, Amount, Category, etc. next.
+                </p>
+                <FileUpload
+                    mode="basic"
+                    accept=".csv"
+                    customUpload
+                    auto
+                    chooseLabel="Choose CSV"
+                    @uploader="onTxnCsvFile"
+                />
+                <Message v-if="txnCsvError" severity="error" class="mt-msg">{{ txnCsvError }}</Message>
+            </template>
+
+            <!-- Step 2: column mapping -->
+            <template v-else-if="txnCsvStep === 2 && txnCsvPreview">
+                <p class="cas-hint">Map the CSV columns to transaction fields.</p>
+                <div class="cas-form">
+                <div class="field-row">
+                    <div class="field">
+                        <label>Date *</label>
+                        <Select
+                            v-model="txnCsvMapping.dateCol"
+                            :options="txnCsvPreview.headers.map((h, i) => ({ label: h, value: i }))"
+                            optionLabel="label"
+                            optionValue="value"
+                            placeholder="Select column…"
+                            class="w-full"
+                        />
+                    </div>
+                    <div class="field">
+                        <label>Amount *</label>
+                        <Select
+                            v-model="txnCsvMapping.amountCol"
+                            :options="txnCsvPreview.headers.map((h, i) => ({ label: h, value: i }))"
+                            optionLabel="label"
+                            optionValue="value"
+                            placeholder="Select column…"
+                            class="w-full"
+                        />
+                    </div>
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label>Category</label>
+                        <Select
+                            v-model="txnCsvMapping.categoryCol"
+                            :options="[{ label: '— None —', value: null }, ...txnCsvPreview.headers.map((h, i) => ({ label: h, value: i }))]"
+                            optionLabel="label"
+                            optionValue="value"
+                            placeholder="— None —"
+                            class="w-full"
+                        />
+                    </div>
+                    <div class="field">
+                        <label>Description</label>
+                        <Select
+                            v-model="txnCsvMapping.descriptionCol"
+                            :options="[{ label: '— None —', value: null }, ...txnCsvPreview.headers.map((h, i) => ({ label: h, value: i }))]"
+                            optionLabel="label"
+                            optionValue="value"
+                            placeholder="— None —"
+                            class="w-full"
+                        />
+                    </div>
+                    <div class="field">
+                        <label>Notes</label>
+                        <Select
+                            v-model="txnCsvMapping.notesCol"
+                            :options="[{ label: '— None —', value: null }, ...txnCsvPreview.headers.map((h, i) => ({ label: h, value: i }))]"
+                            optionLabel="label"
+                            optionValue="value"
+                            placeholder="— None —"
+                            class="w-full"
+                        />
+                    </div>
+                </div>
+                </div>
+                <Message v-if="txnCsvError" severity="error" class="mt-msg">{{ txnCsvError }}</Message>
+                <div class="cas-confirm-btns">
+                    <Button label="Back" icon="pi pi-arrow-left" text @click="txnCsvStep = 1" />
+                    <Button
+                        label="Next"
+                        icon="pi pi-arrow-right"
+                        iconPos="right"
+                        :disabled="txnCsvMapping.dateCol === null || txnCsvMapping.amountCol === null"
+                        @click="txnCsvStep = 3"
+                    />
+                </div>
+            </template>
+
+            <!-- Step 3: preview -->
+            <template v-else-if="txnCsvStep === 3">
+                <p class="cas-hint">
+                    Preview of the first {{ txnCsvMappedPreviewRows.length }} rows. Amounts are shown
+                    positive with the inferred type — negative source amounts import as expenses.
+                </p>
+                <DataTable :value="txnCsvMappedPreviewRows" size="small" scrollable scrollHeight="280px" class="cas-table">
+                    <Column field="date" header="Date" style="min-width: 140px" />
+                    <Column field="type" header="Type" style="min-width: 90px" />
+                    <Column field="amount" header="Amount" style="min-width: 110px" />
+                    <Column field="category" header="Category" style="min-width: 110px" />
+                    <Column field="description" header="Description" style="min-width: 140px" />
+                    <Column field="notes" header="Notes" style="min-width: 110px" />
+                </DataTable>
+                <Message v-if="txnCsvError" severity="error" class="mt-msg">{{ txnCsvError }}</Message>
+                <div class="cas-confirm-btns">
+                    <Button label="Back" icon="pi pi-arrow-left" text @click="txnCsvStep = 2" />
+                    <Button label="Import" icon="pi pi-check" :loading="txnCsvImporting" @click="importTxnCsv" />
+                </div>
+            </template>
+
+            <!-- Step 4: done -->
+            <template v-else-if="txnCsvStep === 4">
+                <div class="cas-done">
+                    <i class="pi pi-check-circle cas-done-icon" />
+                    <p>
+                        <strong>{{ txnCsvImportResult?.imported }}</strong> transactions imported
+                        <span v-if="txnCsvImportResult?.skipped">
+                            ({{ txnCsvImportResult.skipped }} skipped — duplicates or unparseable rows)
+                        </span>
+                    </p>
+                    <p class="text-muted">Imported transactions are now visible in the Transactions view.</p>
+                    <Button label="Done" @click="txnCsvOpen = false" />
+                </div>
+            </template>
+        </Dialog>
+
     </div>
 </template>
 
@@ -1374,6 +1639,8 @@ function formatTime(iso: string | null): string {
     display: flex; flex-direction: column; gap: 0.35rem;
 }
 .cas-form .field label { font-size: 0.83rem; font-weight: 600; display: flex; align-items: center; gap: 0.35rem; }
+.cas-form .field-row { display: flex; gap: 1rem; }
+.cas-form .field-row .field { flex: 1; }
 .cas-file-row {
     display: grid;
     grid-template-columns: 1fr 1fr;

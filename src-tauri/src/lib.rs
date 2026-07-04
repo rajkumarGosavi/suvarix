@@ -108,9 +108,12 @@ pub fn run() {
             portfolio::commands::delete_bond,
             // transactions
             transactions::commands::list_transactions,
+            transactions::commands::count_transactions,
             transactions::commands::add_transaction,
             transactions::commands::update_transaction,
             transactions::commands::delete_transaction,
+            transactions::csv_import::preview_transaction_csv,
+            transactions::csv_import::import_transactions_csv,
             // liabilities
             liabilities::commands::list_loans,
             liabilities::commands::add_loan,

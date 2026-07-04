@@ -1,5 +1,6 @@
 pub mod account;
 pub mod bond;
+pub mod common;
 pub mod enums;
 pub mod budget;
 pub mod crypto;

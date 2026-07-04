@@ -1,7 +1,8 @@
 use csv::ReaderBuilder;
 use rusqlite::Connection;
 use crate::error::{AppError, Result};
-use super::commands::{BrokerCsvRow, ImportResult};
+use crate::models::common::ImportResult;
+use super::commands::BrokerCsvRow;
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 

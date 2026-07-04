@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref, reactive } from "vue";
+import { onMounted, ref, reactive, computed } from "vue";
 import { useConfirm } from "primevue/useconfirm";
 import { useTransactionsStore } from "@/stores/transactions";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
-import { strToDate, dateToStr } from "@/composables/useDateConvert";
+import { dateToStr, strToDateTime, dateTimeToStr } from "@/composables/useDateConvert";
 import { useGamificationSafe } from "@/composables/useGamification";
 
 const store = useTransactionsStore();
@@ -56,7 +56,7 @@ function openAdd() {
 function openEdit(item: any) {
     editItem.value = item;
     Object.assign(form, {
-        date: strToDate(item.date), type: item.type, assetClass: item.assetClass,
+        date: strToDateTime(item.date), type: item.type, assetClass: item.assetClass,
         accountId: item.accountId, holdingId: item.holdingId, amount: item.amount,
         quantity: item.quantity, price: item.price, category: item.category,
         description: item.description ?? "", notes: item.notes ?? "",
@@ -67,7 +67,7 @@ function openEdit(item: any) {
 async function save() {
     loading.value = true;
     try {
-        const payload = { ...form, date: dateToStr(form.date) ?? "" };
+        const payload = { ...form, date: dateTimeToStr(form.date) ?? "" };
         if (editItem.value) {
             await store.update(editItem.value.id, payload);
         } else {
@@ -92,28 +92,71 @@ function confirmDelete(item: any) {
     });
 }
 
+const PAGE_SIZE = 25;
 const filterDateFrom = ref<Date | null>(null);
 const filterType = ref<string | null>(null);
+const searchQuery = ref("");
+const sortField = ref<"date" | "amount">("date");
+const sortOrder = ref<1 | -1>(-1); // PrimeVue convention: 1 = asc, -1 = desc
 
-function applyFilter() {
+const currentOffset = ref(0);
+const totalPages = computed(() => Math.max(1, Math.ceil(store.totalCount / PAGE_SIZE)));
+const currentPage = computed(() => Math.floor(currentOffset.value / PAGE_SIZE) + 1);
+
+function fetchPage(offset: number) {
+    currentOffset.value = offset;
     store.fetch({
         dateFrom: dateToStr(filterDateFrom.value) ?? undefined,
         type: filterType.value ?? undefined,
-        limit: 100,
+        search: searchQuery.value.trim() || undefined,
+        sortBy: sortField.value,
+        sortDir: sortOrder.value === 1 ? "asc" : "desc",
+        limit: PAGE_SIZE,
+        offset,
     });
+}
+
+function applyFilter() {
+    fetchPage(0);
+}
+
+let searchDebounce: ReturnType<typeof setTimeout> | undefined;
+function onSearchInput() {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => fetchPage(0), 350);
 }
 
 function clearFilter() {
     filterDateFrom.value = null;
     filterType.value = null;
-    store.fetch({ limit: 100 });
+    searchQuery.value = "";
+    fetchPage(0);
+}
+
+function onPage(event: { first: number; rows: number }) {
+    fetchPage(event.first);
+}
+
+function onSort(event: { sortField?: string | ((item: any) => string); sortOrder?: 1 | 0 | -1 | null }) {
+    sortField.value = event.sortField === "amount" ? "amount" : "date";
+    sortOrder.value = event.sortOrder === 1 ? 1 : -1;
+    fetchPage(0);
 }
 
 function isCredit(type: string) {
     return ["income","dividend","interest","sell","redemption","deposit"].includes(type);
 }
 
-onMounted(() => store.fetch({ limit: 100 }));
+function formatDateTime(s: string) {
+    const d = strToDateTime(s);
+    if (!d) return s;
+    return d.toLocaleString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit",
+    });
+}
+
+onMounted(() => fetchPage(0));
 </script>
 
 <template>
@@ -124,6 +167,15 @@ onMounted(() => store.fetch({ limit: 100 }));
         </div>
 
         <div class="filter-bar">
+            <IconField class="filter-input">
+                <InputIcon class="pi pi-search" />
+                <InputText
+                    v-model="searchQuery"
+                    placeholder="Search description or category…"
+                    class="w-full"
+                    @input="onSearchInput"
+                />
+            </IconField>
             <DatePicker
                 v-model="filterDateFrom"
                 dateFormat="dd/mm/yy"
@@ -144,6 +196,10 @@ onMounted(() => store.fetch({ limit: 100 }));
             <Button icon="pi pi-times" text @click="clearFilter" v-tooltip="'Clear filters'" />
         </div>
 
+        <p v-if="store.totalCount" class="page-count-hint">
+            {{ store.totalCount }} transaction{{ store.totalCount !== 1 ? 's' : '' }} — page {{ currentPage }} of {{ totalPages }}
+        </p>
+
         <ProgressSpinner v-if="store.isLoading" class="loading" />
 
         <DataTable
@@ -151,10 +207,19 @@ onMounted(() => store.fetch({ limit: 100 }));
             :value="store.transactions"
             stripedRows
             paginator
-            :rows="25"
+            lazy
+            :rows="PAGE_SIZE"
+            :totalRecords="store.totalCount"
+            @page="onPage"
+            sortMode="single"
+            :sortField="sortField"
+            :sortOrder="sortOrder"
+            @sort="onSort"
             emptyMessage="No transactions yet. Click Add to record one."
         >
-            <Column field="date" header="Date" sortable style="width:110px" />
+            <Column field="date" header="Date" style="width:160px">
+                <template #body="{ data }">{{ formatDateTime(data.date) }}</template>
+            </Column>
             <Column field="type" header="Type" style="width:120px">
                 <template #body="{ data }">
                     <Tag :value="data.type" />
@@ -182,7 +247,7 @@ onMounted(() => store.fetch({ limit: 100 }));
             <div class="field-row">
                 <div class="field">
                     <label>Date *</label>
-                    <DatePicker v-model="form.date" dateFormat="dd/mm/yy" showIcon iconDisplay="input" class="w-full" required />
+                    <DatePicker v-model="form.date" dateFormat="dd/mm/yy" showTime hourFormat="24" showIcon iconDisplay="input" class="w-full" required />
                 </div>
                 <div class="field">
                     <label>Type *</label>
@@ -225,6 +290,7 @@ onMounted(() => store.fetch({ limit: 100 }));
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0; }
 .filter-bar { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; flex-wrap: wrap; align-items: center; }
 .filter-input { min-width: 180px; }
+.page-count-hint { font-size: 0.85rem; color: var(--p-text-muted-color); margin: -0.5rem 0 1rem; }
 .loading { display: flex; justify-content: center; padding: 3rem; }
 .dialog-form { display: flex; flex-direction: column; gap: 1rem; padding: 0.5rem 0; }
 .field { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; }
