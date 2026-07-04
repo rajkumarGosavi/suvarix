@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     BondsPanel: typeof import('./components/portfolio/BondsPanel.vue')['default']
     Button: typeof import('primevue/button')['default']
+    CategoryManagerDialog: typeof import('./components/CategoryManagerDialog.vue')['default']
     Checkbox: typeof import('primevue/checkbox')['default']
     Column: typeof import('primevue/column')['default']
     ConfirmDialog: typeof import('primevue/confirmdialog')['default']

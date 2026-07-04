@@ -111,7 +111,7 @@ function brokerSeverity(brokerName: string): string {
             emptyMessage="No equity holdings. Click Add to get started."
             dataKey="key"
         >
-            <!-- Expand toggle â€” only shown when stock exists in multiple accounts -->
+            <!-- Expand toggle — only shown when stock exists in multiple accounts -->
             <Column style="width: 2.5rem; padding-right: 0">
                 <template #body="{ data }">
                     <Button
@@ -121,7 +121,7 @@ function brokerSeverity(brokerName: string): string {
                         size="small"
                         style="padding: 0.25rem"
                         @click="toggleExpand(data.key)"
-                        v-tooltip.right="`${data.entries.length} brokers â€” click to expand`"
+                        v-tooltip.right="`${data.entries.length} brokers — click to expand`"
                     />
                 </template>
             </Column>
@@ -137,7 +137,7 @@ function brokerSeverity(brokerName: string): string {
 
             <Column field="exchange" header="Exch" style="width: 70px" />
 
-            <!-- Broker chips â€” one per account that holds this stock -->
+            <!-- Broker chips — one per account that holds this stock -->
             <Column header="Broker(s)" style="min-width: 140px">
                 <template #body="{ data }">
                     <div class="broker-chips">
@@ -249,7 +249,7 @@ function brokerSeverity(brokerName: string): string {
                     <InputNumber v-model="form.quantity" :min="0" class="w-full" required />
                 </div>
                 <div class="field">
-                    <label>Avg Buy Price (â‚¹) *</label>
+                    <label>Avg Buy Price (₹) *</label>
                     <InputNumber v-model="form.avgBuyPrice" :min="0" :minFractionDigits="2" class="w-full" required />
                 </div>
             </div>

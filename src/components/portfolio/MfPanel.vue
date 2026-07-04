@@ -39,7 +39,7 @@ function confirmDelete(item: any) {
     });
 }
 
-// â”€â”€â”€ SIP Schedules â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── SIP Schedules ────────────────────────────────────────────
 const FREQUENCIES = ["monthly", "quarterly", "weekly"];
 
 interface SipSchedule {
@@ -270,7 +270,7 @@ onMounted(() => {
             </Column>
             <Column field="startDate" header="Start" style="width:105px" />
             <Column field="endDate" header="End" style="width:105px">
-                <template #body="{ data }">{{ data.endDate ?? 'â€”' }}</template>
+                <template #body="{ data }">{{ data.endDate ?? '—' }}</template>
             </Column>
             <Column header="Actions" style="width:90px">
                 <template #body="{ data }">
@@ -308,7 +308,7 @@ onMounted(() => {
                     <InputNumber v-model="form.units" :min="0" :minFractionDigits="3" class="w-full" required />
                 </div>
                 <div class="field">
-                    <label>Avg NAV (â‚¹) *</label>
+                    <label>Avg NAV (₹) *</label>
                     <InputNumber v-model="form.avgNav" :min="0" :minFractionDigits="4" class="w-full" required />
                 </div>
             </div>
@@ -350,7 +350,7 @@ onMounted(() => {
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Amount (â‚¹) *</label>
+                    <label>Amount (₹) *</label>
                     <InputNumber v-model="sipForm.amount" :min="100" :minFractionDigits="0" class="w-full" required />
                 </div>
                 <div class="field">
@@ -360,7 +360,7 @@ onMounted(() => {
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Debit Day (1â€“31) *</label>
+                    <label>Debit Day (1–31) *</label>
                     <InputNumber v-model="sipForm.debitDay" :min="1" :max="31" class="w-full" required />
                 </div>
                 <div class="field">

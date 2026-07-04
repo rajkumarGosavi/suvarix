@@ -13,6 +13,7 @@ pub struct Transaction {
     pub quantity: Option<f64>,
     pub price: Option<f64>,
     pub category: Option<String>,
+    pub tag: Option<String>,
     pub description: Option<String>,
     pub notes: Option<String>,
     pub source: Option<String>,
@@ -33,6 +34,7 @@ pub struct AddTransactionPayload {
     pub quantity: Option<f64>,
     pub price: Option<f64>,
     pub category: Option<String>,
+    pub tag: Option<String>,
     pub description: Option<String>,
     pub notes: Option<String>,
 }

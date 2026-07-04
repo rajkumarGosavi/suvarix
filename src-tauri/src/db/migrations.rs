@@ -30,6 +30,12 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // MIGRATION_014: gamification tables — only when feature is enabled
     #[cfg(feature = "gamification")]
     conn.execute_batch(MIGRATION_014).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_015: user-managed categories table, seeded with legacy hardcoded defaults
+    // and backfilled from any category text already present (e.g. from CSV imports) —
+    // idempotent (CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE throughout).
+    conn.execute_batch(MIGRATION_015).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_016 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
+    let _ = conn.execute_batch(MIGRATION_016);
     Ok(())
 }
 
@@ -64,6 +70,47 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert_eq!(settings_count, 1);
+    }
+
+    #[test]
+    fn migration_015_seeds_defaults_and_backfills_existing_data() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        // Simulate a pre-existing/imported transaction using a category NOT in the
+        // hardcoded default list — this must survive migration as a real category row.
+        conn.execute(
+            "INSERT INTO transactions (date, type, amount, category) VALUES ('2026-01-01','expense',10,'Consulting Fees')",
+            [],
+        ).unwrap();
+
+        run_migrations(&conn).expect("re-running migrations after seeding data should succeed");
+
+        let default_count: i64 = conn.query_row(
+            "SELECT count(*) FROM categories WHERE name = 'Food'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(default_count, 1, "hardcoded default categories should be seeded");
+
+        let backfilled_count: i64 = conn.query_row(
+            "SELECT count(*) FROM categories WHERE name = 'Consulting Fees'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(backfilled_count, 1, "pre-existing/imported category text must be backfilled, not dropped");
+    }
+
+    #[test]
+    fn migration_016_adds_tag_column_idempotently() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        // First run already happened via test_db_pool(); running again must not error
+        // even though ALTER TABLE ADD COLUMN fails on a column that already exists.
+        run_migrations(&conn).expect("second run_migrations call should be a no-op, not an error");
+        run_migrations(&conn).expect("third run_migrations call should also be a no-op");
+
+        conn.execute(
+            "INSERT INTO transactions (date, type, amount, tag) VALUES ('2026-01-01','expense',10,'House')",
+            [],
+        ).expect("tag column should exist and accept values");
     }
 }
 
@@ -515,6 +562,34 @@ INSERT OR IGNORE INTO badges (id, name, description, icon, xp_reward) VALUES
     ('debt_destroyer',       'Debt Destroyer',         'Paid off a liability or loan',                     '⚔️', 20),
     ('crore_club',           'Crore Club',             'Net worth crossed Rs 1 Crore',                     '💎', 20),
     ('centurion',            'Centurion',              'Earned 100 XP total',                              '💯', 20);
+";
+
+// Shared, user-manageable category list for transactions/budgets/recurring transactions.
+// Seeded with the legacy hardcoded defaults, then backfilled with any category text already
+// present in existing data (e.g. imported from another app) so nothing is lost or hidden.
+const MIGRATION_015: &str = "
+CREATE TABLE IF NOT EXISTS categories (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT UNIQUE NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO categories (name) VALUES
+    ('Food'), ('Rent'), ('EMI'), ('Travel'), ('Medical'), ('Utilities'),
+    ('Entertainment'), ('Education'), ('Shopping'), ('Dividend'), ('Interest'),
+    ('Salary'), ('Other');
+
+INSERT OR IGNORE INTO categories (name)
+    SELECT DISTINCT category FROM transactions WHERE category IS NOT NULL AND category != '';
+INSERT OR IGNORE INTO categories (name)
+    SELECT DISTINCT category FROM budgets WHERE category IS NOT NULL AND category != '';
+INSERT OR IGNORE INTO categories (name)
+    SELECT DISTINCT category FROM recurring_transactions WHERE category IS NOT NULL AND category != '';
+";
+
+// ALTER TABLE is not idempotent — this migration is run with error ignored in run_migrations
+const MIGRATION_016: &str = "
+ALTER TABLE transactions ADD COLUMN tag TEXT;
 ";
 
 const MIGRATION_011: &str = "

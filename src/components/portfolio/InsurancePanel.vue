@@ -105,15 +105,15 @@ const FREQ_OPTIONS = ["monthly", "quarterly", "annual"];
                 <template #body="{ data }">{{ formatINR(data.premiumAmount) }} / {{ data.premiumFreq }}</template>
             </Column>
             <Column field="coverageAmount" header="Coverage">
-                <template #body="{ data }">{{ data.coverageAmount ? formatINR(data.coverageAmount) : 'â€”' }}</template>
+                <template #body="{ data }">{{ data.coverageAmount ? formatINR(data.coverageAmount) : '—' }}</template>
             </Column>
             <Column field="maturityValue" header="Maturity Value">
-                <template #body="{ data }">{{ data.maturityValue ? formatINR(data.maturityValue) : 'â€”' }}</template>
+                <template #body="{ data }">{{ data.maturityValue ? formatINR(data.maturityValue) : '—' }}</template>
             </Column>
             <Column header="Next Premium">
                 <template #body="{ data }">
                     <Tag v-if="dueBadgeLabel(data)" :value="dueBadgeLabel(data)!" />
-                    <span v-else>â€”</span>
+                    <span v-else>—</span>
                 </template>
             </Column>
             <Column header="Actions" style="width:100px">
@@ -143,7 +143,7 @@ const FREQ_OPTIONS = ["monthly", "quarterly", "annual"];
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Premium Amount (â‚¹) *</label>
+                    <label>Premium Amount (₹) *</label>
                     <InputNumber v-model="form.premiumAmount" :min="0" class="w-full" required />
                 </div>
                 <div class="field">
@@ -153,11 +153,11 @@ const FREQ_OPTIONS = ["monthly", "quarterly", "annual"];
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Coverage Amount (â‚¹)</label>
+                    <label>Coverage Amount (₹)</label>
                     <InputNumber v-model="form.coverageAmount" :min="0" class="w-full" />
                 </div>
                 <div class="field">
-                    <label>Maturity Value (â‚¹)</label>
+                    <label>Maturity Value (₹)</label>
                     <InputNumber v-model="form.maturityValue" :min="0" class="w-full" />
                 </div>
             </div>

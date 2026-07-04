@@ -121,13 +121,13 @@ fn last_month_bounds() -> (String, String) {
     let last_of_prev = first_of_this.pred_opt().unwrap_or(first_of_this);
     let first_of_prev = NaiveDate::from_ymd_opt(last_of_prev.year(), last_of_prev.month(), 1)
         .unwrap_or(last_of_prev);
-    (first_of_prev.to_string(), last_of_prev.to_string())
+    (first_of_prev.to_string(), format!("{} 23:59:59", last_of_prev))
 }
 
 fn current_month_bounds() -> (String, String) {
     use chrono::{Datelike, Local};
     let now = Local::now();
     let start = format!("{}-{:02}-01", now.year(), now.month());
-    let end = format!("{}-{:02}-31", now.year(), now.month());
+    let end = format!("{}-{:02}-31 23:59:59", now.year(), now.month());
     (start, end)
 }

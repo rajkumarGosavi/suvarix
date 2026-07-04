@@ -79,7 +79,7 @@ function confirmDelete(item: any) {
 const COMPOUNDING = ["monthly", "quarterly", "half-yearly", "annually"];
 
 function daysToMaturity(maturityDate: string) {
-    if (!maturityDate) return "â€”";
+    if (!maturityDate) return "—";
     const diff = new Date(maturityDate).getTime() - Date.now();
     const days = Math.ceil(diff / 86400000);
     if (days < 0) return "Matured";
@@ -105,7 +105,7 @@ function daysToMaturity(maturityDate: string) {
             </Column>
             <Column field="compounding" header="Compounding" />
             <Column field="maturityAmount" header="Maturity Amt">
-                <template #body="{ data }">{{ data.maturityAmount ? formatINR(data.maturityAmount) : 'â€”' }}</template>
+                <template #body="{ data }">{{ data.maturityAmount ? formatINR(data.maturityAmount) : '—' }}</template>
             </Column>
             <Column header="Matures In" style="width:130px">
                 <template #body="{ data }">
@@ -136,7 +136,7 @@ function daysToMaturity(maturityDate: string) {
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Principal (â‚¹) *</label>
+                    <label>Principal (₹) *</label>
                     <InputNumber v-model="form.principal" :min="0" class="w-full" required />
                 </div>
                 <div class="field">
@@ -165,7 +165,7 @@ function daysToMaturity(maturityDate: string) {
                 </div>
             </div>
             <div class="field">
-                <label>Maturity Amount (â‚¹)</label>
+                <label>Maturity Amount (₹)</label>
                 <InputNumber v-model="form.maturityAmount" :min="0" class="w-full" />
             </div>
             <div class="field-row field--check-row">

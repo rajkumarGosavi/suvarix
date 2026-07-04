@@ -2,22 +2,25 @@
 import { onMounted, ref, reactive, computed } from "vue";
 import { useConfirm } from "primevue/useconfirm";
 import { useTransactionsStore } from "@/stores/transactions";
+import { useCategoriesStore } from "@/stores/categories";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { dateToStr, strToDateTime, dateTimeToStr } from "@/composables/useDateConvert";
 import { useGamificationSafe } from "@/composables/useGamification";
+import CategoryManagerDialog from "@/components/CategoryManagerDialog.vue";
 
 const store = useTransactionsStore();
+const categoriesStore = useCategoriesStore();
 const confirm = useConfirm();
 const { formatINR } = useCurrencyFormat();
 const { awardXP, updateStreak } = useGamificationSafe();
 
 const showDialog = ref(false);
+const showCategoryManager = ref(false);
 const editItem = ref<any>(null);
 const loading = ref(false);
 
 const TYPES = ["buy","sell","dividend","interest","sip","redemption","deposit","withdrawal","expense","income","emi","transfer"];
 const ASSET_CLASSES = ["equity","mf","fd","ppf_epf","real_estate","gold","crypto","insurance","cash","loan","credit_card"];
-const CATEGORIES = ["Food","Rent","EMI","Travel","Medical","Utilities","Entertainment","Education","Shopping","Dividend","Interest","Salary","Other"];
 
 interface TxnForm {
     date: Date | null;
@@ -29,6 +32,7 @@ interface TxnForm {
     quantity: number | null;
     price: number | null;
     category: string | null;
+    tag: string;
     description: string;
     notes: string;
 }
@@ -36,14 +40,14 @@ interface TxnForm {
 const form = reactive<TxnForm>({
     date: null, type: "expense", assetClass: null, accountId: null,
     holdingId: null, amount: 0, quantity: null, price: null,
-    category: null, description: "", notes: "",
+    category: null, tag: "", description: "", notes: "",
 });
 
 function resetForm() {
     Object.assign(form, {
         date: new Date(), type: "expense", assetClass: null, accountId: null,
         holdingId: null, amount: 0, quantity: null, price: null,
-        category: null, description: "", notes: "",
+        category: null, tag: "", description: "", notes: "",
     });
 }
 
@@ -59,7 +63,7 @@ function openEdit(item: any) {
         date: strToDateTime(item.date), type: item.type, assetClass: item.assetClass,
         accountId: item.accountId, holdingId: item.holdingId, amount: item.amount,
         quantity: item.quantity, price: item.price, category: item.category,
-        description: item.description ?? "", notes: item.notes ?? "",
+        tag: item.tag ?? "", description: item.description ?? "", notes: item.notes ?? "",
     });
     showDialog.value = true;
 }
@@ -67,7 +71,7 @@ function openEdit(item: any) {
 async function save() {
     loading.value = true;
     try {
-        const payload = { ...form, date: dateTimeToStr(form.date) ?? "" };
+        const payload = { ...form, date: dateTimeToStr(form.date) ?? "", tag: form.tag.trim() || null };
         if (editItem.value) {
             await store.update(editItem.value.id, payload);
         } else {
@@ -156,7 +160,10 @@ function formatDateTime(s: string) {
     });
 }
 
-onMounted(() => fetchPage(0));
+onMounted(() => {
+    fetchPage(0);
+    categoriesStore.fetchCategories();
+});
 </script>
 
 <template>
@@ -171,7 +178,7 @@ onMounted(() => fetchPage(0));
                 <InputIcon class="pi pi-search" />
                 <InputText
                     v-model="searchQuery"
-                    placeholder="Search description or category…"
+                    placeholder="Search description, category, or tag…"
                     class="w-full"
                     @input="onSearchInput"
                 />
@@ -228,6 +235,11 @@ onMounted(() => fetchPage(0));
             <Column field="assetClass" header="Asset Class" />
             <Column field="description" header="Description" />
             <Column field="category" header="Category" />
+            <Column field="tag" header="Tag" style="width:110px">
+                <template #body="{ data }">
+                    <Tag v-if="data.tag" :value="data.tag" severity="secondary" />
+                </template>
+            </Column>
             <Column field="amount" header="Amount" sortable style="width:140px">
                 <template #body="{ data }">
                     {{ isCredit(data.type) ? "+" : "−" }}{{ formatINR(Math.abs(data.amount)) }}
@@ -261,12 +273,19 @@ onMounted(() => fetchPage(0));
             <div class="field-row">
                 <div class="field">
                     <label>Category</label>
-                    <Select v-model="form.category" :options="CATEGORIES" placeholder="Select…" showClear class="w-full" />
+                    <div class="category-field-row">
+                        <Select v-model="form.category" :options="categoriesStore.names" placeholder="Select…" showClear class="w-full" />
+                        <Button icon="pi pi-cog" text aria-label="Manage categories" v-tooltip="'Manage categories'" @click="showCategoryManager = true" />
+                    </div>
                 </div>
                 <div class="field">
                     <label>Asset Class</label>
                     <Select v-model="form.assetClass" :options="ASSET_CLASSES" placeholder="Select…" showClear class="w-full" />
                 </div>
+            </div>
+            <div class="field">
+                <label>Tag</label>
+                <InputText v-model="form.tag" placeholder="e.g. House, Personal…" class="w-full" />
             </div>
             <div class="field">
                 <label>Description</label>
@@ -282,6 +301,8 @@ onMounted(() => fetchPage(0));
             </div>
         </form>
     </Dialog>
+
+    <CategoryManagerDialog v-model:visible="showCategoryManager" />
 </template>
 
 <style scoped>
@@ -295,6 +316,8 @@ onMounted(() => fetchPage(0));
 .dialog-form { display: flex; flex-direction: column; gap: 1rem; padding: 0.5rem 0; }
 .field { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; }
 .field-row { display: flex; gap: 1rem; }
+.category-field-row { display: flex; gap: 0.4rem; align-items: center; }
+.category-field-row .p-select { flex: 1; }
 label { font-size: 0.85rem; font-weight: 500; }
 .dialog-footer { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
 

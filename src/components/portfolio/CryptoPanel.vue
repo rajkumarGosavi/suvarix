@@ -48,10 +48,10 @@ function confirmDelete(item: any) {
             <Column field="quantity" header="Quantity">
                 <template #body="{ data }">{{ data.quantity }}</template>
             </Column>
-            <Column field="avgBuyPrice" header="Avg Buy (â‚¹)">
+            <Column field="avgBuyPrice" header="Avg Buy (₹)">
                 <template #body="{ data }">{{ formatINR(data.avgBuyPrice) }}</template>
             </Column>
-            <Column field="currentValue" header="Value (â‚¹)" sortable>
+            <Column field="currentValue" header="Value (₹)" sortable>
                 <template #body="{ data }">{{ formatINR(data.currentValue) }}</template>
             </Column>
             <Column field="pnl" header="P&amp;L" sortable>
@@ -88,7 +88,7 @@ function confirmDelete(item: any) {
                     <InputNumber v-model="form.quantity" :min="0" :minFractionDigits="6" class="w-full" required />
                 </div>
                 <div class="field">
-                    <label>Avg Buy Price (â‚¹) *</label>
+                    <label>Avg Buy Price (₹) *</label>
                     <InputNumber v-model="form.avgBuyPrice" :min="0" :minFractionDigits="2" class="w-full" required />
                 </div>
             </div>

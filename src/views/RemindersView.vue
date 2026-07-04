@@ -3,11 +3,14 @@ import { ref, reactive, computed, onMounted } from "vue";
 import { useConfirm } from "primevue/useconfirm";
 import { useToast } from "primevue/usetoast";
 import { useRemindersStore, type BillPayload, type RecurringTxPayload, type UpcomingReminder, type RecurringTx } from "@/stores/reminders";
+import { useCategoriesStore } from "@/stores/categories";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { strToDate, dateToStr } from "@/composables/useDateConvert";
 import { useGamificationSafe } from "@/composables/useGamification";
+import CategoryManagerDialog from "@/components/CategoryManagerDialog.vue";
 
 const store = useRemindersStore();
+const categoriesStore = useCategoriesStore();
 const confirm = useConfirm();
 const { awardXP, checkBadges } = useGamificationSafe();
 const toast = useToast();
@@ -15,10 +18,12 @@ const { formatINR } = useCurrencyFormat();
 
 const activeTab = ref(0);
 const filterDays = ref(30);
+const showCategoryManager = ref(false);
 
 const TX_TYPES = ["income","expense","emi","sip","buy","sell","dividend","interest","redemption","deposit","withdrawal","transfer"];
 const ASSET_CLASSES = ["equity","mf","fd","ppf_epf","real_estate","gold","crypto","insurance","cash","loan","credit_card"];
-const CATEGORIES = ["Food","Rent","EMI","Travel","Medical","Utilities","Entertainment","Education","Shopping","Dividend","Interest","Salary","Other"];
+// Bill categories are a fixed, DB-CHECK-constrained classification for bills specifically
+// (distinct from the free-form, user-managed category list used by transactions/recurring txns).
 const BILL_CATEGORIES = ["utilities","rent","subscription","insurance","emi","tax","other"];
 const FREQUENCIES_BILL = ["weekly","monthly","quarterly","yearly","one_time"];
 const FREQUENCIES_RECURRING = ["daily","weekly","monthly","yearly"];
@@ -287,6 +292,7 @@ onMounted(async () => {
         store.fetchRecurring(),
         store.loadDue(),
         store.fetchMilestones(),
+        categoriesStore.fetchCategories(),
     ]);
 });
 </script>
@@ -556,7 +562,10 @@ onMounted(async () => {
                 </div>
                 <div class="field">
                     <label>Category</label>
-                    <Select v-model="recurForm.category" :options="CATEGORIES" fluid />
+                    <div class="category-field-row">
+                        <Select v-model="recurForm.category" :options="categoriesStore.names" fluid />
+                        <Button icon="pi pi-cog" text aria-label="Manage categories" v-tooltip="'Manage categories'" @click="showCategoryManager = true" />
+                    </div>
                 </div>
             </div>
             <div class="field-row">
@@ -633,6 +642,8 @@ onMounted(async () => {
             <Button label="Add" icon="pi pi-check" :loading="milestoneLoading" @click="saveMilestone" />
         </template>
     </Dialog>
+
+    <CategoryManagerDialog v-model:visible="showCategoryManager" />
 </template>
 
 <style scoped>
@@ -694,6 +705,8 @@ onMounted(async () => {
 .field label { font-size: 0.85rem; font-weight: 500; color: var(--p-text-muted-color); }
 .field-row { display: flex; gap: 0.75rem; }
 .field-row .field { flex: 1; }
+.category-field-row { display: flex; gap: 0.4rem; align-items: center; }
+.category-field-row .p-select { flex: 1; }
 
 .apply-hint { margin: 0 0 1rem; color: var(--p-text-muted-color); font-size: 0.875rem; }
 .apply-row { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--p-content-border-color); }

@@ -147,7 +147,7 @@ const holdings = computed(() => portfolio.gold.map((h: any) => ({
             </template>
 
             <div class="field">
-                <label>Avg Buy Price (â‚¹ per gram/unit) *</label>
+                <label>Avg Buy Price (₹ per gram/unit) *</label>
                 <InputNumber v-model="form.avgBuyPrice" :min="0" :minFractionDigits="2" class="w-full" required />
             </div>
 

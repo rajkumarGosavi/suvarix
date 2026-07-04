@@ -92,7 +92,7 @@ function gainPct(item: any) {
             </Column>
             <Column field="currentValue" header="Current Value">
                 <template #body="{ data }">
-                    {{ data.currentValue ? formatINR(data.currentValue) : 'â€”' }}
+                    {{ data.currentValue ? formatINR(data.currentValue) : '—' }}
                 </template>
             </Column>
             <Column header="Gain">
@@ -101,11 +101,11 @@ function gainPct(item: any) {
                           :class="Number(gainPct(data)) >= 0 ? 'gain' : 'loss'">
                         {{ gainPct(data) }}%
                     </span>
-                    <span v-else>â€”</span>
+                    <span v-else>—</span>
                 </template>
             </Column>
             <Column field="rentalIncome" header="Rental/mo">
-                <template #body="{ data }">{{ data.rentalIncome ? formatINR(data.rentalIncome) : 'â€”' }}</template>
+                <template #body="{ data }">{{ data.rentalIncome ? formatINR(data.rentalIncome) : '—' }}</template>
             </Column>
             <Column header="Actions" style="width:100px">
                 <template #body="{ data }">
@@ -134,7 +134,7 @@ function gainPct(item: any) {
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Purchase Price (â‚¹) *</label>
+                    <label>Purchase Price (₹) *</label>
                     <InputNumber v-model="form.purchasePrice" :min="0" class="w-full" required />
                 </div>
                 <div class="field">
@@ -144,11 +144,11 @@ function gainPct(item: any) {
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Current Value (â‚¹)</label>
+                    <label>Current Value (₹)</label>
                     <InputNumber v-model="form.currentValue" :min="0" class="w-full" />
                 </div>
                 <div class="field">
-                    <label>Rental Income / month (â‚¹)</label>
+                    <label>Rental Income / month (₹)</label>
                     <InputNumber v-model="form.rentalIncome" :min="0" class="w-full" />
                 </div>
             </div>

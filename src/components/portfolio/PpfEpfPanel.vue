@@ -45,10 +45,10 @@ function confirmDelete(item: any) {
                 <template #body="{ data }">{{ data.interestRate }}%</template>
             </Column>
             <Column field="employerContrib" header="Employer Contrib">
-                <template #body="{ data }">{{ data.employerContrib ? formatINR(data.employerContrib) : 'â€”' }}</template>
+                <template #body="{ data }">{{ data.employerContrib ? formatINR(data.employerContrib) : '—' }}</template>
             </Column>
             <Column field="employeeContrib" header="Employee Contrib">
-                <template #body="{ data }">{{ data.employeeContrib ? formatINR(data.employeeContrib) : 'â€”' }}</template>
+                <template #body="{ data }">{{ data.employeeContrib ? formatINR(data.employeeContrib) : '—' }}</template>
             </Column>
             <Column header="Actions" style="width:100px">
                 <template #body="{ data }">
@@ -76,7 +76,7 @@ function confirmDelete(item: any) {
                 <InputText v-model="form.accountNumber" class="w-full" />
             </div>
             <div class="field">
-                <label>Current Balance (â‚¹) *</label>
+                <label>Current Balance (₹) *</label>
                 <InputNumber v-model="form.balance" :min="0" class="w-full" required />
             </div>
             <div class="field">
@@ -85,11 +85,11 @@ function confirmDelete(item: any) {
             </div>
             <div class="field-row" v-if="form.accountType === 'EPF' || form.accountType === 'VPF'">
                 <div class="field">
-                    <label>Employer Contribution (â‚¹)</label>
+                    <label>Employer Contribution (₹)</label>
                     <InputNumber v-model="form.employerContrib" :min="0" class="w-full" />
                 </div>
                 <div class="field">
-                    <label>Employee Contribution (â‚¹)</label>
+                    <label>Employee Contribution (₹)</label>
                     <InputNumber v-model="form.employeeContrib" :min="0" class="w-full" />
                 </div>
             </div>

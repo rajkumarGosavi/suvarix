@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onMounted, computed, ref } from "vue";
 import { useBudgetStore } from "@/stores/budget";
+import { useCategoriesStore } from "@/stores/categories";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { useChartColors } from "@/composables/useChartColors";
+import CategoryManagerDialog from "@/components/CategoryManagerDialog.vue";
 import { Bar } from "vue-chartjs";
 import {
     Chart as ChartJS,
@@ -17,6 +19,7 @@ import {
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 const store = useBudgetStore();
+const categoriesStore = useCategoriesStore();
 const { formatINR, formatCompact } = useCurrencyFormat();
 const { textColor, mutedColor, gridColor } = useChartColors();
 
@@ -26,11 +29,7 @@ const PERIODS = [
     { label: "All Time", value: "all" },
 ];
 
-const EXPENSE_CATEGORIES = [
-    "Food", "Rent", "EMI", "Travel", "Medical",
-    "Utilities", "Entertainment", "Education", "Shopping", "Other",
-];
-
+const showCategoryManager = ref(false);
 const selectedPeriod = ref("this_month");
 
 function changePeriod(value: string) {
@@ -81,11 +80,11 @@ const trendChartOptions = computed(() => ({
 // Budget dialog
 const showBudgetDialog = ref(false);
 const budgetLoading = ref(false);
-const budgetForm = ref({ category: EXPENSE_CATEGORIES[0], monthlyLimit: 0 });
+const budgetForm = ref({ category: "", monthlyLimit: 0 });
 
 function openSetBudget(category?: string, limit?: number) {
     budgetForm.value = {
-        category: category ?? EXPENSE_CATEGORIES[0],
+        category: category ?? categoriesStore.names[0] ?? "",
         monthlyLimit: limit ?? 0,
     };
     showBudgetDialog.value = true;
@@ -117,7 +116,10 @@ const totalExpense = computed(() =>
     expenseSummary.value.reduce((s, c) => s + c.total, 0)
 );
 
-onMounted(() => store.fetchAll());
+onMounted(() => {
+    store.fetchAll();
+    categoriesStore.fetchCategories();
+});
 </script>
 
 <template>
@@ -236,7 +238,10 @@ onMounted(() => store.fetchAll());
         <form @submit.prevent="saveBudget" class="dialog-form">
             <div class="field">
                 <label>Category *</label>
-                <Select v-model="budgetForm.category" :options="EXPENSE_CATEGORIES" class="w-full" required />
+                <div class="category-field-row">
+                    <Select v-model="budgetForm.category" :options="categoriesStore.names" class="w-full" required />
+                    <Button icon="pi pi-cog" text aria-label="Manage categories" v-tooltip="'Manage categories'" @click="showCategoryManager = true" />
+                </div>
             </div>
             <div class="field">
                 <label>Monthly Limit (₹) *</label>
@@ -248,6 +253,8 @@ onMounted(() => store.fetchAll());
             </div>
         </form>
     </Dialog>
+
+    <CategoryManagerDialog v-model:visible="showCategoryManager" />
 </template>
 
 <style scoped>
@@ -279,6 +286,8 @@ onMounted(() => store.fetchAll());
 
 .dialog-form { display: flex; flex-direction: column; gap: 1rem; padding: 0.5rem 0; }
 .field { display: flex; flex-direction: column; gap: 0.4rem; }
+.category-field-row { display: flex; gap: 0.4rem; align-items: center; }
+.category-field-row .p-select { flex: 1; }
 label { font-size: 0.85rem; font-weight: 500; }
 .dialog-footer { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
 

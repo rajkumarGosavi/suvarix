@@ -371,7 +371,8 @@ pub fn clear_dummy_data(state: State<DbState>) -> Result<()> {
         [DUMMY_TAG],
     )?;
     conn.execute(
-        "DELETE FROM bond_holdings WHERE account_id IN (SELECT id FROM accounts WHERE provider = ?1)",
+        "DELETE FROM bond_holdings WHERE account_id IN (SELECT id FROM accounts WHERE provider = ?1)
+             OR isin IN ('IN0020220178', 'INE001A07BS8', 'INE062A08330', 'INE414G07BI5')",
         [DUMMY_TAG],
     )?;
 

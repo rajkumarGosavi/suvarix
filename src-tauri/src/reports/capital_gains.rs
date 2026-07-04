@@ -117,7 +117,9 @@ pub fn calculate(conn: &Connection, fy: &str, method: &str) -> Result<CapitalGai
 
     // ── SELL transactions in the financial year ────────────────────────────────
     let fy_start_str = fy_start.to_string();
-    let fy_end_str   = fy_end.to_string();
+    // fy_end is date-only but the date column may hold a full datetime —
+    // widen to end-of-day so same-day sell transactions aren't excluded.
+    let fy_end_str   = format!("{fy_end} 23:59:59");
 
     let sells: Vec<TxRow> = {
         let mut stmt = conn.prepare(

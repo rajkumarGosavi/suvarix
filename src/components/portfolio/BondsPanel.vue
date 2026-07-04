@@ -146,7 +146,7 @@ function bondTypeSeverity(type: string): string {
 }
 
 function daysToMaturity(maturityDate: string | null) {
-    if (!maturityDate) return "â€”";
+    if (!maturityDate) return "—";
     const diff = new Date(maturityDate).getTime() - Date.now();
     const days = Math.ceil(diff / 86400000);
     if (days < 0) return "Matured";
@@ -222,7 +222,7 @@ const totalPnl = computed(() => totalCurrentValue.value - totalInvestment.value)
                 </template>
             </Column>
             <Column field="creditRating" header="Rating" style="width:80px">
-                <template #body="{ data }">{{ data.creditRating ?? "â€”" }}</template>
+                <template #body="{ data }">{{ data.creditRating ?? "—" }}</template>
             </Column>
             <Column header="Actions" style="width:100px">
                 <template #body="{ data }">
@@ -255,12 +255,12 @@ const totalPnl = computed(() => totalCurrentValue.value - totalInvestment.value)
                 </div>
                 <div class="field">
                     <label>Credit Rating</label>
-                    <InputText v-model="form.creditRating" placeholder="AAA, AA+, Aâ€¦" class="w-full" />
+                    <InputText v-model="form.creditRating" placeholder="AAA, AA+, A…" class="w-full" />
                 </div>
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Face Value (â‚¹) *</label>
+                    <label>Face Value (₹) *</label>
                     <InputNumber v-model="form.faceValue" :min="1" class="w-full" required />
                 </div>
                 <div class="field">
@@ -270,11 +270,11 @@ const totalPnl = computed(() => totalCurrentValue.value - totalInvestment.value)
             </div>
             <div class="field-row">
                 <div class="field">
-                    <label>Purchase Price (â‚¹) *</label>
+                    <label>Purchase Price (₹) *</label>
                     <InputNumber v-model="form.purchasePrice" :min="0" :minFractionDigits="2" class="w-full" required />
                 </div>
                 <div class="field">
-                    <label>Current Price (â‚¹)</label>
+                    <label>Current Price (₹)</label>
                     <InputNumber v-model="form.currentPrice" :min="0" :minFractionDigits="2" class="w-full" />
                 </div>
             </div>

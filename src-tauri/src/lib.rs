@@ -2,6 +2,7 @@ use tauri::Manager;
 
 pub mod constants;
 pub mod auth;
+pub mod categories;
 pub mod db;
 pub mod dev_tools;
 pub mod error;
@@ -114,6 +115,11 @@ pub fn run() {
             transactions::commands::delete_transaction,
             transactions::csv_import::preview_transaction_csv,
             transactions::csv_import::import_transactions_csv,
+            // categories
+            categories::commands::list_categories,
+            categories::commands::add_category,
+            categories::commands::update_category,
+            categories::commands::delete_category,
             // liabilities
             liabilities::commands::list_loans,
             liabilities::commands::add_loan,
