@@ -29,9 +29,14 @@ pub struct SetBudgetPayload {
 }
 
 #[tauri::command]
-pub fn get_category_summary(period: String, state: State<DbState>) -> Result<Vec<CategorySummary>> {
+pub fn get_category_summary(
+    period: String,
+    custom_start: Option<String>,
+    custom_end: Option<String>,
+    state: State<DbState>,
+) -> Result<Vec<CategorySummary>> {
     let conn = state.0.get()?;
-    let (start, end) = period_bounds(&period);
+    let (start, end) = period_bounds(&period, custom_start, custom_end);
     let mut stmt = conn.prepare(
         "SELECT category, type, SUM(amount) as total, COUNT(*) as cnt
          FROM transactions
@@ -105,10 +110,14 @@ pub fn get_monthly_trend(months: i64, state: State<DbState>) -> Result<Vec<Month
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-fn period_bounds(period: &str) -> (String, String) {
+fn period_bounds(period: &str, custom_start: Option<String>, custom_end: Option<String>) -> (String, String) {
     match period {
         "this_month" => current_month_bounds(),
         "last_month" => last_month_bounds(),
+        "custom" => match (custom_start, custom_end) {
+            (Some(start), Some(end)) => (start, format!("{end} 23:59:59")),
+            _ => ("1900-01-01".into(), "2099-12-31".into()),
+        },
         _ => ("1900-01-01".into(), "2099-12-31".into()),
     }
 }

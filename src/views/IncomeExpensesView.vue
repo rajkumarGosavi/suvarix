@@ -4,6 +4,7 @@ import { useBudgetStore } from "@/stores/budget";
 import { useCategoriesStore } from "@/stores/categories";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { useChartColors } from "@/composables/useChartColors";
+import { dateToStr } from "@/composables/useDateConvert";
 import CategoryManagerDialog from "@/components/CategoryManagerDialog.vue";
 import { Bar } from "vue-chartjs";
 import {
@@ -27,14 +28,24 @@ const PERIODS = [
     { label: "This Month", value: "this_month" },
     { label: "Last Month", value: "last_month" },
     { label: "All Time", value: "all" },
+    { label: "Custom Range", value: "custom" },
 ];
 
 const showCategoryManager = ref(false);
 const selectedPeriod = ref("this_month");
+const customFrom = ref<Date | null>(null);
+const customTo = ref<Date | null>(null);
 
 function changePeriod(value: string) {
     selectedPeriod.value = value;
-    store.fetchAll(value);
+    if (value !== "custom") {
+        store.fetchAll(value);
+    }
+}
+
+function applyCustomRange() {
+    if (!customFrom.value || !customTo.value) return;
+    store.fetchAll("custom", dateToStr(customFrom.value), dateToStr(customTo.value));
 }
 
 // Chart — reverse trend so oldest is on the left
@@ -126,14 +137,36 @@ onMounted(() => {
     <div class="ie-view">
         <div class="page-header">
             <h1 class="page-title">Income &amp; Expenses</h1>
-            <Select
-                v-model="selectedPeriod"
-                :options="PERIODS"
-                optionLabel="label"
-                optionValue="value"
-                @change="changePeriod(selectedPeriod)"
-                style="width:160px"
-            />
+            <div class="period-controls">
+                <Select
+                    v-model="selectedPeriod"
+                    :options="PERIODS"
+                    optionLabel="label"
+                    optionValue="value"
+                    @change="changePeriod(selectedPeriod)"
+                    style="width:160px"
+                />
+                <template v-if="selectedPeriod === 'custom'">
+                    <DatePicker
+                        v-model="customFrom"
+                        dateFormat="dd/mm/yy"
+                        showIcon
+                        iconDisplay="input"
+                        placeholder="From date"
+                        style="width:150px"
+                        @date-select="applyCustomRange"
+                    />
+                    <DatePicker
+                        v-model="customTo"
+                        dateFormat="dd/mm/yy"
+                        showIcon
+                        iconDisplay="input"
+                        placeholder="To date"
+                        style="width:150px"
+                        @date-select="applyCustomRange"
+                    />
+                </template>
+            </div>
         </div>
 
         <div v-if="store.isLoading" class="loading"><ProgressSpinner /></div>
@@ -260,6 +293,7 @@ onMounted(() => {
 <style scoped>
 .ie-view { max-width: 1100px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; }
+.period-controls { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0; }
 .loading { display: flex; justify-content: center; padding: 4rem; }
 
