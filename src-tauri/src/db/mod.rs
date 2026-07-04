@@ -12,6 +12,10 @@ pub mod migrations;
 pub struct DbPool {
     db_path: String,
     inner: Mutex<Option<Pool<SqliteConnectionManager>>>,
+    /// Current master password, kept in memory only while unlocked — needed to
+    /// ATTACH sibling SQLCipher databases (backup/restore) with the same key.
+    /// Cleared on lock().
+    password: Mutex<Option<String>>,
 }
 
 pub struct DbState(pub DbPool);
@@ -20,7 +24,7 @@ const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 
 impl DbPool {
     pub fn new(db_path: String) -> Self {
-        Self { db_path, inner: Mutex::new(None) }
+        Self { db_path, inner: Mutex::new(None), password: Mutex::new(None) }
     }
 
     /// Returns a pooled connection, or AuthRequired if not yet unlocked.
@@ -48,7 +52,23 @@ impl DbPool {
             migrations::run_migrations(&conn)?;
         }
         *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
+        *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
         Ok(())
+    }
+
+    /// Path to the live encrypted DB file on disk.
+    pub fn db_path(&self) -> &str {
+        &self.db_path
+    }
+
+    /// Current master password, or AuthRequired if not unlocked. Needed to ATTACH
+    /// sibling SQLCipher databases (e.g. backup/restore) with the same key.
+    pub fn current_password(&self) -> Result<String> {
+        self.password
+            .lock()
+            .map_err(|_| AppError::Database("password lock error".into()))?
+            .clone()
+            .ok_or(AppError::AuthRequired)
     }
 
     /// Try to open DB with password. On success stores pool. Returns false on wrong password.
@@ -66,6 +86,7 @@ impl DbPool {
                 migrations::run_migrations(&conn)?;
             }
             *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
+            *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
             return Ok(true);
         }
 
@@ -81,6 +102,7 @@ impl DbPool {
                         migrations::run_migrations(&conn)?;
                     }
                     *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
+                    *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
                     return Ok(true);
                 }
             }
@@ -101,6 +123,9 @@ impl DbPool {
         if let Ok(mut guard) = self.inner.lock() {
             *guard = None;
         }
+        if let Ok(mut guard) = self.password.lock() {
+            *guard = None;
+        }
     }
 
     /// Change passphrase: PRAGMA rekey on existing conn, then rebuild pool.
@@ -117,6 +142,7 @@ impl DbPool {
         // Step 2: rebuild pool so with_init uses new password (guard released above)
         let new_pool = build_pool(&self.db_path, new_password)?;
         *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(new_pool);
+        *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(new_password.to_string());
         Ok(())
     }
 }
