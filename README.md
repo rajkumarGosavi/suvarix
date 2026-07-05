@@ -1,8 +1,8 @@
+<img src="public/brand/mark.svg" width="64" height="64" alt="Suvarix logo">
+
 # Suvarix — Personal Finance Tracker
 
 A privacy-first, offline-first desktop app for Indian investors. Track all your assets, liabilities, income, and expenses in one place — everything stays on your device.
-
-See the [Roadmap](ROADMAP.md) for what's planned through mid-2027.
 
 ---
 
