@@ -146,11 +146,13 @@ All goals share the same "current value" — your total net worth. When your por
 ## Transactions
 
 A simple income/expense ledger. Each transaction has:
-- Date, amount, type (income or expense)
-- Category (salary, rent, food, etc.)
-- Account and optional notes
+- Date & time, amount, type (income or expense)
+- Category — managed via the shared **Manage Categories** dialog (also reachable from Income & Expenses and Reminders)
+- Account and optional notes/tag
 
-Use this to track day-to-day cash flow. The Income & Expenses section aggregates these.
+Search, sort by date or amount, and filter by date/type — results are paginated across your full history. Use this to track day-to-day cash flow. The Income & Expenses section aggregates these.
+
+**Bulk import:** Data Sources → Transaction CSV Import lets you upload any transaction/expense-tracker CSV and map its columns (date, amount, category, etc.) instead of entering rows one by one.
 
 ---
 
@@ -170,15 +172,16 @@ Track credit card balances, credit limits, and due dates.
 
 ## Income & Expenses
 
+- **Period** — This Month, Last Month, All Time, or a **Custom Range** (pick From/To dates).
 - **Budget** — set a monthly budget per category. The app shows how much you've spent vs. budgeted, with a red highlight when over budget.
 - **Monthly trend** — bar chart of income vs. expenses over the last 12 months.
-- **Category summary** — breakdown of spending by category for the current month.
+- **Category summary** — breakdown of spending by category for the selected period.
 
 ---
 
 ## Data Sources
 
-Broker connections: **Zerodha** (OAuth), **Upstox** (OAuth), **Angel One** (SmartAPI + TOTP). Each syncs equity holdings directly into your portfolio. File imports: **MF Central CAS** (PDF), **Groww** (CSV), and a generic **Holdings CSV Import** dialog that works for every asset type. See the [User Guide](USER_GUIDE.md) for full setup steps.
+Broker connections: **Zerodha** (OAuth), **Upstox** (OAuth), **Angel One** (SmartAPI + TOTP). Each syncs equity holdings directly into your portfolio. File imports: **MF Central CAS** (PDF), **Groww** (CSV), a generic **Holdings CSV Import** dialog that works for every asset type, and a **Transaction CSV Import** for bulk-loading income/expense history. See the [User Guide](USER_GUIDE.md) for full setup steps.
 
 ### Zerodha Kite
 

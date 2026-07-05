@@ -97,6 +97,10 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 # Rust lint
 cargo clippy --manifest-path src-tauri/Cargo.toml
+
+# Frontend tests (Vitest)
+pnpm test
+pnpm test:watch
 ```
 
 ---
@@ -120,7 +124,7 @@ Key dirs:
 | `src/composables/` | Shared logic (`useCurrencyFormat`, `useGamification`, etc.) |
 | `src/components/portfolio/` | Per-asset panel components |
 | `src-tauri/src/` | Rust modules (one per domain) |
-| `src-tauri/src/db/migrations.rs` | All DB schema — `MIGRATION_001` through `MIGRATION_013` |
+| `src-tauri/src/db/migrations.rs` | All DB schema — `MIGRATION_001` through `MIGRATION_016` |
 
 ---
 

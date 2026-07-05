@@ -331,23 +331,43 @@ The Transactions view is a full log of all financial activity — income, expens
 
 1. Click **Add Transaction** (top right).
 2. Fill in:
-   - **Date** — transaction date
+   - **Date** — transaction date and time (defaults to right now)
    - **Type** — buy, sell, dividend, interest, sip, redemption, deposit, withdrawal, expense, income, emi, transfer
    - **Amount** — in ₹
-   - **Category** — optional (Food, Rent, EMI, Salary, Dividend, etc.)
+   - **Category** — pick from your managed category list (see [Managing Categories](#managing-categories) below)
+   - **Tag** — optional free-text label for extra grouping beyond category
    - **Asset Class** — optional link to an asset class
    - **Description** — free text label
    - **Notes** — any additional detail
 3. Click **Add**.
 
-### Filtering
+### Managing Categories
 
-Use the filter bar above the table to narrow results:
+Click **Manage Categories** (top right, next to Add Transaction) to open the category list shared across Transactions, Budgets, and Recurring Transactions.
 
-- **From Date** — show transactions on or after this date
-- **Type** — filter by transaction type
+- Type a name and click **+** to add a new category.
+- Click any category name to rename it inline (saves on Enter or when you click away).
+- Click the **trash icon** to delete a category. You'll be asked to confirm. **Deletion is blocked if the category is still used** by any transaction, budget, or recurring transaction — you'll see an error naming how many records reference it. Recategorize or remove those records first, then delete the category.
 
-Click the **× button** to clear filters.
+### Searching, Sorting, and Filtering
+
+- **Search box** — matches description, category, or tag across your full transaction history (not just the current page), with a short debounce as you type.
+- **Column sort** — click the **Date** or **Amount** column header to sort; click again to reverse direction.
+- **Filter bar** — narrow by **From Date** and **Type**. Click the **× button** to clear filters.
+- Results are paginated — use the paginator below the table to move through pages.
+
+### Importing Transactions from CSV
+
+Use this when you have transaction/expense history exported from another app (e.g. MoneyWallet) or bank statement — different from the "Holdings CSV Import" used for portfolio holdings (see [Data Sources](#8-data-sources)).
+
+1. Go to **Data Sources → Import → Import CSV** (under the Transaction CSV Import card).
+2. Upload any CSV — Suvarix reads its header row and tries to guess which column is which.
+3. On the mapping screen, confirm or correct the column mapping: **Date**, **Amount** (both required), and optionally **Category**, **Description**, **Notes**.
+4. Review the preview table, then click **Import**.
+
+**Accepted date formats:** `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DD`, `DD/MM/YYYY`, `DD-MM-YYYY`, or `MM/DD/YYYY`. Rows with a date Suvarix can't parse are skipped.
+
+**Amount sign convention on import:** a negative amount in the source CSV is imported as an **expense**; zero or positive is imported as **income**. Rows with an unparseable or zero amount are skipped. Re-importing the same file won't create duplicates — rows matching an existing transaction's date, amount, and description are skipped automatically.
 
 ### Sign Convention
 
@@ -412,6 +432,7 @@ Choose between:
 - **This Month** — current calendar month
 - **Last Month** — previous calendar month
 - **All Time** — all transactions
+- **Custom Range** — pick a **From** and **To** date with the two date pickers that appear; the summary, chart, and category breakdown recompute for that exact range as soon as both dates are set
 
 ### Summary Cards
 
@@ -430,7 +451,7 @@ Two columns showing spending totals by category — Income and Expenses.
 
 ### Budget Manager
 
-Set monthly spending limits for any expense category.
+Set monthly spending limits for any expense category. Click **Manage Categories** here (or from Transactions/Reminders) to add, rename, or delete categories — see [Managing Categories](#managing-categories).
 
 **To set a budget:**
 1. Click the **pencil icon** next to any category.
@@ -550,7 +571,18 @@ Uploading both together gives you the best of both: correct ISINs **and** correc
 
 ---
 
-### 8.6 Price Refresh
+### 8.6 Transaction CSV Import
+
+A generic column-mapping importer for **transaction/ledger** history — separate from the Holdings CSV Import in 8.4, which is for portfolio holdings, not cash flow.
+
+1. In Suvarix → Data Sources → **Transaction CSV Import**, upload any CSV export (bank statement, expense-tracker export, etc.).
+2. Suvarix guesses the column mapping from the header row (looking for things like `date`, `amount`, `category`).
+3. Confirm or correct the mapping — **Date** and **Amount** are required; **Category**, **Description**, and **Notes** are optional.
+4. Review the preview table, then click **Import**. Imported rows appear immediately in [Transactions](#5-transactions).
+
+See [Importing Transactions from CSV](#importing-transactions-from-csv) in the Transactions section for accepted date formats and the amount sign convention.
+
+### 8.7 Price Refresh
 
 #### Equity Prices
 
@@ -779,6 +811,9 @@ Suvarix does not automatically back up your data. Set a reminder to use **Settin
 | Set up a SIP | Portfolio → Mutual Funds → SIP Schedules → Add SIP |
 | Add a financial goal | Goals → Add Goal |
 | Record an expense | Transactions → Add Transaction (Type: expense) |
+| Add/rename/delete a category | Transactions / Income & Expenses / Reminders → Manage Categories |
+| Import transaction history from CSV | Data Sources → Transaction CSV Import |
+| View spending for a custom date range | Income & Expenses → period selector → Custom Range |
 | Add a home loan | Liabilities → Loans → Add Loan |
 | View loan EMI schedule | Liabilities → Loans → calendar icon on the row |
 | Set a monthly budget | Income & Expenses → Budget Manager → pencil icon |
