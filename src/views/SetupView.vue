@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { APP_NAME } from "@/constants";
+import { EULA_TEXT } from "@/eulaText";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 
@@ -11,9 +12,15 @@ const password = ref("");
 const confirm = ref("");
 const error = ref("");
 const loading = ref(false);
+const eulaAccepted = ref(false);
+const showEula = ref(false);
 
 async function submit() {
     error.value = "";
+    if (!eulaAccepted.value) {
+        error.value = "You must agree to the End User License Agreement to continue.";
+        return;
+    }
     if (password.value.length < 8) {
         error.value = "Password must be at least 8 characters.";
         return;
@@ -70,10 +77,24 @@ async function submit() {
                         :inputProps="{ autocomplete: 'new-password' }"
                     />
                 </div>
+                <div class="field eula-field">
+                    <Checkbox v-model="eulaAccepted" inputId="eula" binary />
+                    <label for="eula" class="eula-label">
+                        I agree to the
+                        <a href="#" @click.prevent="showEula = true">End User License Agreement</a>
+                    </label>
+                </div>
                 <Message v-if="error" severity="error">{{ error }}</Message>
-                <Button type="submit" label="Create Password & Get Started" :loading="loading" class="w-full" />
+                <Button type="submit" label="Create Password & Get Started" :loading="loading" :disabled="!eulaAccepted" class="w-full" />
             </form>
         </div>
+
+        <Dialog v-model:visible="showEula" header="End User License Agreement" modal style="width:600px; max-width:90vw">
+            <pre class="eula-text">{{ EULA_TEXT }}</pre>
+            <template #footer>
+                <Button label="Close" @click="showEula = false" />
+            </template>
+        </Dialog>
     </div>
 </template>
 
@@ -135,5 +156,31 @@ h2 {
 label {
     font-size: 0.875rem;
     font-weight: 500;
+}
+
+.eula-field {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.eula-label {
+    font-weight: 400;
+    font-size: 0.85rem;
+}
+
+.eula-label a {
+    color: var(--p-primary-color);
+    text-decoration: underline;
+}
+
+.eula-text {
+    white-space: pre-wrap;
+    font-family: inherit;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    max-height: 60vh;
+    overflow-y: auto;
+    margin: 0;
 }
 </style>

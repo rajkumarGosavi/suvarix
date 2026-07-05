@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
+import { EULA_VERSION } from "@/eulaText";
 
 export const useAuthStore = defineStore("auth", {
     state: () => ({
@@ -9,13 +10,20 @@ export const useAuthStore = defineStore("auth", {
         _onboardingSeen: false,
         _initialized: false,
         _lastActivity: Date.now(),
+        eulaVersion: null as string | null,
     }),
+
+    getters: {
+        // Null = pre-EULA install upgrading (setting never existed) or never accepted;
+        // stale = terms changed since accept. Both cases correctly gate to /eula.
+        eulaCurrent: (state) => state.eulaVersion === EULA_VERSION,
+    },
 
     actions: {
         async init() {
             if (this._initialized) return;
             this.isPasswordSet = await invoke<boolean>("is_password_set");
-            // onboardingComplete is loaded after unlock() — DB is locked here
+            // onboardingComplete/eulaVersion are loaded after unlock() — DB is locked here
             this._initialized = true;
         },
 
@@ -28,6 +36,9 @@ export const useAuthStore = defineStore("auth", {
                     const val = await invoke<string>("get_setting", { key: "onboarding_complete" });
                     this.onboardingComplete = val === "true";
                 } catch { /* new install — stays false, onboarding will run */ }
+                try {
+                    this.eulaVersion = await invoke<string>("get_setting", { key: "eula_version" });
+                } catch { this.eulaVersion = null; /* pre-EULA install — gate will prompt */ }
             }
             return ok;
         },
@@ -37,6 +48,14 @@ export const useAuthStore = defineStore("auth", {
             this.isPasswordSet = true;
             this.isUnlocked = true;
             // onboardingComplete stays false — correct, new user needs onboarding
+            // SetupView only lets this run after its own EULA checkbox is ticked, so
+            // accept immediately — the user has already agreed to the current terms.
+            await this.acceptEula();
+        },
+
+        async acceptEula() {
+            await invoke("set_setting", { key: "eula_version", value: EULA_VERSION });
+            this.eulaVersion = EULA_VERSION;
         },
 
         async completeOnboarding() {
