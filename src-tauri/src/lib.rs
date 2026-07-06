@@ -1,4 +1,8 @@
-use tauri::Manager;
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+    Manager,
+};
 
 pub mod constants;
 pub mod auth;
@@ -26,6 +30,7 @@ pub mod gamification;
 pub mod test_utils;
 
 use db::DbState;
+use notifications::scheduler::SchedulerState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -36,6 +41,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--hidden"]),
+        ))
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -46,6 +55,56 @@ pub fn run() {
             let db_path = app_data_dir.join("suvarix.db");
             let db_state = DbState::new(db_path.to_string_lossy().into_owned());
             app.manage(db_state);
+            app.manage(SchedulerState::default());
+
+            // Tray icon — lets the app keep running (and keep notifying) after
+            // the main window is closed instead of quitting the process.
+            let show_item = MenuItem::with_id(app, "show", "Open Suvarix", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => {
+                        if let Some(scheduler) = app.try_state::<SchedulerState>() {
+                            scheduler.stop();
+                        }
+                        if let Some(db) = app.try_state::<DbState>() {
+                            db.0.lock();
+                        }
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
+            // Closing the window hides it to the tray instead of quitting —
+            // the background reminder scheduler keeps running while hidden.
+            if let Some(window) = app.get_webview_window("main") {
+                let win = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = win.hide();
+                    }
+                });
+            }
+
+            // Autostart launches with `--hidden` — don't show the window in that case.
+            if std::env::args().any(|a| a == "--hidden") {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -54,6 +113,7 @@ pub fn run() {
             auth::commands::setup_master_password,
             auth::commands::verify_master_password,
             auth::commands::change_master_password,
+            auth::commands::lock,
             // portfolio – equity
             portfolio::commands::list_equity,
             portfolio::commands::add_equity,

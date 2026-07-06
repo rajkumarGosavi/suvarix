@@ -16,5 +16,5 @@ pub fn setup_db_state() -> (tempfile::TempDir, DbState) {
     let db_path = dir.path().join("test.db");
     let pool = DbPool::new(db_path.to_string_lossy().into_owned());
     pool.initialize(TEST_PASSWORD).expect("initialize test db");
-    (dir, DbState(pool))
+    (dir, DbState(std::sync::Arc::new(pool)))
 }

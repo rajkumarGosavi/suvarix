@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { save, open } from "@tauri-apps/plugin-dialog";
+import { isEnabled as isAutostartEnabled, enable as enableAutostart, disable as disableAutostart } from "@tauri-apps/plugin-autostart";
 import { useConfirm } from "primevue/useconfirm";
 import { useToast } from "primevue/usetoast";
 import { useUiStore } from "@/stores/ui";
@@ -60,6 +61,22 @@ async function saveLockSetting() {
         toast.add({ severity: "success", summary: "Saved", detail: "Auto-lock setting updated.", life: 2500 });
     } finally {
         lockSaving.value = false;
+    }
+}
+
+// ─── Launch at login ─────────────────────────────────────────
+const autostartEnabled = ref(false);
+const autostartLoading = ref(false);
+
+async function toggleAutostart(val: boolean) {
+    autostartLoading.value = true;
+    try {
+        if (val) await enableAutostart(); else await disableAutostart();
+        autostartEnabled.value = val;
+    } catch (e: any) {
+        toast.add({ severity: "error", summary: "Failed", detail: String(e?.message ?? e), life: 4000 });
+    } finally {
+        autostartLoading.value = false;
     }
 }
 
@@ -326,6 +343,9 @@ onMounted(async () => {
     await loadLockSetting();
     await loadDiagnostics();
     try {
+        autostartEnabled.value = await isAutostartEnabled();
+    } catch { /* non-critical */ }
+    try {
         appDataDir.value = await invoke<string>("get_app_data_dir");
     } catch { /* non-critical */ }
     try {
@@ -384,6 +404,20 @@ getVersion().then(v => appVersion.value = v);
                     />
                     <Button label="Save" size="small" :loading="lockSaving" @click="saveLockSetting" />
                 </div>
+            </div>
+
+            <Divider />
+
+            <div class="data-row">
+                <div class="data-row-info">
+                    <span class="data-row-title">Launch at login</span>
+                    <span class="data-row-desc">Start {{ APP_NAME }} hidden in the system tray when you log in, so bill and maturity reminders keep notifying you even when the app isn't open.</span>
+                </div>
+                <ToggleSwitch
+                    :modelValue="autostartEnabled"
+                    :disabled="autostartLoading"
+                    @update:modelValue="toggleAutostart"
+                />
             </div>
         </div>
 

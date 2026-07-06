@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { invoke } from "@tauri-apps/api/core";
+import { enable as enableAutostart } from "@tauri-apps/plugin-autostart";
 import { EULA_VERSION } from "@/eulaText";
 
 export const useAuthStore = defineStore("auth", {
@@ -51,6 +52,9 @@ export const useAuthStore = defineStore("auth", {
             // SetupView only lets this run after its own EULA checkbox is ticked, so
             // accept immediately — the user has already agreed to the current terms.
             await this.acceptEula();
+            // Default on so bill/maturity reminders can notify even when the app
+            // isn't open — user can turn this off any time in Settings.
+            try { await enableAutostart(); } catch { /* non-critical */ }
         },
 
         async acceptEula() {
@@ -64,7 +68,11 @@ export const useAuthStore = defineStore("auth", {
             this._onboardingSeen = true;
         },
 
-        lock() {
+        async lock() {
+            // Drops the Rust-side pool/password and stops the background
+            // reminder scheduler — without this the scheduler keeps running
+            // (and could keep querying the pool) after the UI thinks it's locked.
+            await invoke("lock");
             this.isUnlocked = false;
         },
 

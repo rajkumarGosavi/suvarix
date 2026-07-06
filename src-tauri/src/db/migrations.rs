@@ -36,6 +36,8 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_015).map_err(|e| AppError::Database(e.to_string()))?;
     // MIGRATION_016 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
     let _ = conn.execute_batch(MIGRATION_016);
+    // MIGRATION_017: reminder-scheduler dedup state — INSERT OR IGNORE is idempotent
+    conn.execute_batch(MIGRATION_017).map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
 }
 
@@ -590,6 +592,13 @@ INSERT OR IGNORE INTO categories (name)
 // ALTER TABLE is not idempotent — this migration is run with error ignored in run_migrations
 const MIGRATION_016: &str = "
 ALTER TABLE transactions ADD COLUMN tag TEXT;
+";
+
+// Dedup state for the background reminder scheduler (notifications/scheduler.rs) —
+// a JSON array of "source:source_id:date" keys already notified, so a bill/maturity
+// isn't re-notified on every interval tick before its due date rolls over.
+const MIGRATION_017: &str = "
+INSERT OR IGNORE INTO app_settings (key, value) VALUES ('notified_reminder_ids', '[]');
 ";
 
 const MIGRATION_011: &str = "

@@ -3,7 +3,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::error::{AppError, Result};
 
@@ -18,7 +18,10 @@ pub struct DbPool {
     password: Mutex<Option<String>>,
 }
 
-pub struct DbState(pub DbPool);
+/// Wraps the pool in `Arc` so the background reminder scheduler (a tokio task
+/// spawned independently of any Tauri command's invoke context) can hold its
+/// own clone of the same pool without borrowing from `State<DbState>`.
+pub struct DbState(pub Arc<DbPool>);
 
 const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 
@@ -149,7 +152,7 @@ impl DbPool {
 
 impl DbState {
     pub fn new(db_path: String) -> Self {
-        DbState(DbPool::new(db_path))
+        DbState(Arc::new(DbPool::new(db_path)))
     }
 }
 

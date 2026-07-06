@@ -1,7 +1,7 @@
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use tauri::State;
 use serde::{Deserialize, Serialize};
-use crate::db::DbState;
+use crate::db::{DbPool, DbState};
 use crate::error::{AppError, Result};
 
 // ── Bill structs ──────────────────────────────────────────────────────────────
@@ -179,7 +179,13 @@ pub fn delete_bill(id: i64, state: State<DbState>) -> Result<()> {
 
 #[tauri::command]
 pub fn get_upcoming_reminders(days: i32, state: State<DbState>) -> Result<Vec<UpcomingReminder>> {
-    let conn = state.0.get()?;
+    upcoming_reminders(&state.0, days)
+}
+
+/// Plain-Rust entry point (no Tauri invoke context) so the background
+/// reminder scheduler can call this directly from a tokio task.
+pub fn upcoming_reminders(pool: &DbPool, days: i32) -> Result<Vec<UpcomingReminder>> {
+    let conn = pool.get()?;
     let today = Local::now().date_naive();
     let mut reminders: Vec<UpcomingReminder> = vec![];
 
@@ -788,7 +794,13 @@ pub fn get_calendar_events(year: i32, month: u32, state: State<DbState>) -> Resu
 
 #[tauri::command]
 pub fn get_maturity_alerts(days: i64, state: State<DbState>) -> Result<Vec<MaturityAlert>> {
-    let conn = state.0.get()?;
+    maturity_alerts(&state.0, days)
+}
+
+/// Plain-Rust entry point (no Tauri invoke context) so the background
+/// reminder scheduler can call this directly from a tokio task.
+pub fn maturity_alerts(pool: &DbPool, days: i64) -> Result<Vec<MaturityAlert>> {
+    let conn = pool.get()?;
     let mut alerts: Vec<MaturityAlert> = vec![];
 
     // FDs — maturity_date NOT NULL (indexed via idx_fd_maturity)

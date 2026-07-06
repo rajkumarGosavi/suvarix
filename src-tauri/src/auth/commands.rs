@@ -1,6 +1,7 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 use crate::db::DbState;
 use crate::error::{AppError, Result};
+use crate::notifications::scheduler::SchedulerState;
 
 #[tauri::command]
 pub fn is_password_set(state: State<DbState>) -> Result<bool> {
@@ -8,13 +9,39 @@ pub fn is_password_set(state: State<DbState>) -> Result<bool> {
 }
 
 #[tauri::command]
-pub fn setup_master_password(password: String, state: State<DbState>) -> Result<()> {
-    state.0.initialize(&password)
+pub fn setup_master_password(
+    password: String,
+    state: State<DbState>,
+    scheduler: State<SchedulerState>,
+    app: AppHandle,
+) -> Result<()> {
+    state.0.initialize(&password)?;
+    scheduler.start(app, state.0.clone());
+    Ok(())
 }
 
 #[tauri::command]
-pub fn verify_master_password(password: String, state: State<DbState>) -> Result<bool> {
-    state.0.unlock(&password)
+pub fn verify_master_password(
+    password: String,
+    state: State<DbState>,
+    scheduler: State<SchedulerState>,
+    app: AppHandle,
+) -> Result<bool> {
+    let ok = state.0.unlock(&password)?;
+    if ok {
+        scheduler.start(app, state.0.clone());
+    }
+    Ok(ok)
+}
+
+/// Locks the DB (drops pool + in-memory password) and stops the background
+/// reminder scheduler. Must be called explicitly — closing the window only
+/// hides it to the tray, it does not lock the DB.
+#[tauri::command]
+pub fn lock(state: State<DbState>, scheduler: State<SchedulerState>) -> Result<()> {
+    scheduler.stop();
+    state.0.lock();
+    Ok(())
 }
 
 #[tauri::command]

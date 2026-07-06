@@ -20,8 +20,8 @@ async function accept() {
     }
 }
 
-function decline() {
-    auth.lock();
+async function decline() {
+    await auth.lock();
     router.push("/unlock");
 }
 </script>

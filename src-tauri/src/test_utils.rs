@@ -18,7 +18,7 @@ pub fn test_db_pool() -> (tempfile::TempDir, DbPool) {
 
 pub fn test_db_state() -> (tempfile::TempDir, DbState) {
     let (dir, pool) = test_db_pool();
-    (dir, DbState(pool))
+    (dir, DbState(std::sync::Arc::new(pool)))
 }
 
 #[cfg(test)]

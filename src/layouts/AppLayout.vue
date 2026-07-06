@@ -23,8 +23,8 @@ const { nativeNotify } = useNotifications();
 const { checkGoals } = useGoalCheck();
 const { checkMaturity } = useMaturityCheck();
 
-function lock() {
-    auth.lock();
+async function lock() {
+    await auth.lock();
     router.push("/unlock");
 }
 
