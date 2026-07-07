@@ -7,6 +7,7 @@ import { usePortfolioStore } from "@/stores/portfolio";
 import { useHoldingCrud } from "@/composables/useHoldingCrud";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { strToDate, dateToStr } from "@/composables/useDateConvert";
+import { friendlyError } from "@/utils/errorMessage";
 
 const portfolio = usePortfolioStore();
 const confirm = useConfirm();
@@ -159,7 +160,7 @@ async function submitSip() {
         showSipDialog.value = false;
         await fetchSips();
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Failed to save SIP", detail: String(e), life: 5000 });
+        toast.add({ severity: "error", summary: "Failed to save SIP", detail: friendlyError(e, "Couldn't save the SIP. Try again."), life: 5000 });
     } finally {
         sipFormLoading.value = false;
     }

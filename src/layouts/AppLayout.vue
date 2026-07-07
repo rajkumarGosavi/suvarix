@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useUiStore } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
 import { useAnalytics } from "@/composables/useAnalytics";
@@ -22,6 +23,11 @@ const remindersStore = useRemindersStore();
 const { nativeNotify } = useNotifications();
 const { checkGoals } = useGoalCheck();
 const { checkMaturity } = useMaturityCheck();
+
+// ─── Auto-sync notifications ───────────────────────────────────
+// Only fires when a background tick actually pulled newer data from
+// another device — a routine push-only tick with no diff stays silent.
+let unlistenAutoSync: UnlistenFn | null = null;
 
 async function lock() {
     await auth.lock();
@@ -67,7 +73,7 @@ async function checkReminders() {
         nativeNotify(`${APP_NAME} — Bills due today`, detail);
     } else if (tomorrowBills.length > 0) {
         const names = tomorrowBills.map(r => r.name).join(", ");
-        toast.add({ severity: "warn", summary: "Bills due tomorrow", detail: names, life: 8000 });
+        toast.add({ severity: "warn", summary: "Bills due tomorrow", detail: `Due tomorrow: ${names}`, life: 8000 });
     }
 
     // Check goal achievements against current net worth
@@ -88,11 +94,20 @@ onMounted(async () => {
             router.push("/unlock");
         }
     }, 60_000);
+    unlistenAutoSync = await listen("auto-sync-imported", () => {
+        toast.add({
+            severity: "info",
+            summary: "Synced from another device",
+            detail: "New data was pulled in from your sync folder. Restart the app to see it.",
+            life: 10000,
+        });
+    });
 });
 
 onUnmounted(() => {
     ACTIVITY_EVENTS.forEach(e => window.removeEventListener(e, onActivity));
     if (lockTimer) clearInterval(lockTimer);
+    if (unlistenAutoSync) unlistenAutoSync();
 });
 
 const navItems = [

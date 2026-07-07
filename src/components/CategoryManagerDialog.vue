@@ -3,6 +3,7 @@ import { ref, onMounted } from "vue";
 import { useConfirm } from "primevue/useconfirm";
 import { useToast } from "primevue/usetoast";
 import { useCategoriesStore } from "@/stores/categories";
+import { friendlyError } from "@/utils/errorMessage";
 
 const visible = defineModel<boolean>("visible", { default: false });
 const store = useCategoriesStore();
@@ -17,7 +18,7 @@ const busy = ref(false);
 onMounted(() => store.fetchCategories());
 
 function showError(prefix: string, e: any) {
-    toast.add({ severity: "error", summary: prefix, detail: String(e?.message ?? e), life: 5000 });
+    toast.add({ severity: "error", summary: prefix, detail: friendlyError(e, `${prefix}. Try again.`), life: 5000 });
 }
 
 async function addCategory() {

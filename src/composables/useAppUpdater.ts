@@ -2,6 +2,7 @@ import { check } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { useConfirm } from 'primevue/useconfirm'
 import { useToast } from 'primevue/usetoast'
+import { friendlyError } from '@/utils/errorMessage'
 
 export function useAppUpdater() {
   const confirm = useConfirm()
@@ -30,7 +31,7 @@ export function useAppUpdater() {
             await update.downloadAndInstall()
             await relaunch()
           } catch (e) {
-            toast.add({ severity: 'error', summary: 'Update failed', detail: String(e), life: 5000 })
+            toast.add({ severity: 'error', summary: 'Update failed', detail: friendlyError(e, 'Couldn\'t install the update. Try again later.'), life: 5000 })
           }
         },
       })

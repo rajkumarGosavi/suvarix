@@ -13,6 +13,7 @@ import { useBudgetStore } from "@/stores/budget";
 import { useRemindersStore } from "@/stores/reminders";
 import { APP_NAME } from "@/constants";
 import { useAnalytics } from "@/composables/useAnalytics";
+import { friendlyError } from "@/utils/errorMessage";
 
 // ─── Analytics types ─────────────────────────────────────────
 interface EventStat   { eventName: string; count: number; lastSeen: string; }
@@ -74,7 +75,7 @@ async function toggleAutostart(val: boolean) {
         if (val) await enableAutostart(); else await disableAutostart();
         autostartEnabled.value = val;
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Failed", detail: String(e?.message ?? e), life: 4000 });
+        toast.add({ severity: "error", summary: "Failed", detail: friendlyError(e, "Couldn't update launch-at-login setting. Try again."), life: 4000 });
     } finally {
         autostartLoading.value = false;
     }
@@ -99,7 +100,7 @@ async function changePw() {
         pwSuccess.value = "Password changed successfully.";
         currentPw.value = ""; newPw.value = ""; confirmPw.value = "";
     } catch (e: any) {
-        pwError.value = e?.message?.message ?? String(e?.message ?? "Failed to change password.");
+        pwError.value = friendlyError(e, "Failed to change password.");
     } finally {
         pwLoading.value = false;
     }
@@ -123,7 +124,7 @@ async function doBackup() {
         await invoke("backup_database", { destPath: dest });
         toast.add({ severity: "success", summary: "Backup saved", detail: dest, life: 4000 });
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Backup failed", detail: String(e?.message ?? e), life: 5000 });
+        toast.add({ severity: "error", summary: "Backup failed", detail: friendlyError(e, "Couldn't save the backup. Try again."), life: 5000 });
     } finally {
         backupLoading.value = false;
     }
@@ -147,7 +148,7 @@ async function doRestore() {
                 await invoke("restore_database", { srcPath: src as string });
                 toast.add({ severity: "success", summary: "Restore complete", detail: "Restart the app to see restored data.", life: 6000 });
             } catch (e: any) {
-                toast.add({ severity: "error", summary: "Restore failed", detail: String(e?.message ?? e), life: 5000 });
+                toast.add({ severity: "error", summary: "Restore failed", detail: friendlyError(e, "Couldn't restore the backup. Try again."), life: 5000 });
             } finally {
                 restoreLoading.value = false;
             }
@@ -168,7 +169,7 @@ async function doWipe() {
         wipeDialogVisible.value = false;
         toast.add({ severity: "success", summary: "All data deleted", detail: "Portfolio and transaction data has been wiped.", life: 5000 });
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Wipe failed", detail: String(e?.message ?? e), life: 5000 });
+        toast.add({ severity: "error", summary: "Wipe failed", detail: friendlyError(e, "Couldn't delete the data. Try again."), life: 5000 });
     } finally {
         wipeLoading.value = false;
     }
@@ -207,7 +208,7 @@ async function exportDiag() {
         await invoke("write_csv", { path: dest, content: json });
         toast.add({ severity: "success", summary: "Exported", detail: dest, life: 4000 });
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Export failed", detail: String(e?.message ?? e), life: 5000 });
+        toast.add({ severity: "error", summary: "Export failed", detail: friendlyError(e, "Couldn't export diagnostics. Try again."), life: 5000 });
     } finally {
         exportingDiag.value = false;
     }
@@ -286,15 +287,109 @@ async function confirmSync() {
                 "import_sync_backup",
                 { srcPath: syncPath.value, password: syncPassword.value },
             );
-            toast.add({ severity: "success", summary: "Import complete", detail: `${r.rowsImported} records across ${r.tablesImported} tables restored. Restart the app to refresh all views.`, life: 8000 });
+            toast.add({ severity: "success", summary: "Import complete", detail: `${r.rowsImported} records restored. Restart the app to refresh all views.`, life: 8000 });
         }
     } catch (e: any) {
-        const detail = String(e?.message ?? e);
+        const detail = friendlyError(e, syncMode.value === "export" ? "Couldn't export the sync backup. Try again." : "Couldn't import the sync backup. Try again.");
         toast.add({ severity: "error", summary: syncMode.value === "export" ? "Export failed" : "Import failed", detail, life: 6000 });
-        trackError(syncMode.value === "export" ? "sync_export_failed" : "sync_import_failed", detail);
+        trackError(syncMode.value === "export" ? "sync_export_failed" : "sync_import_failed", String(e?.message?.message ?? e?.message ?? e));
     } finally {
         syncLoading.value = false;
         syncPassword.value = "";
+    }
+}
+
+// ─── Auto Sync ───────────────────────────────────────────────
+const AUTO_SYNC_INTERVAL_OPTIONS = [
+    { label: "15 minutes", value: "15" },
+    { label: "30 minutes", value: "30" },
+    { label: "1 hour",     value: "60" },
+];
+const autoSyncEnabled = ref(false);
+const autoSyncFolder = ref("");
+const autoSyncInterval = ref("30");
+const autoSyncHasPassword = ref(false);
+const autoSyncPwVisible = ref(false);
+const autoSyncPwInput = ref("");
+const autoSyncSettingSaving = ref(false);
+const autoSyncNowLoading = ref(false);
+const lastSyncAt = ref("");
+
+async function loadAutoSyncSettings() {
+    try { autoSyncFolder.value = await invoke<string>("get_setting", { key: "sync_folder_path" }); } catch { /* not set yet */ }
+    try { autoSyncEnabled.value = (await invoke<string>("get_setting", { key: "auto_sync_enabled" })) === "true"; } catch { /* not set yet */ }
+    try {
+        const v = await invoke<string>("get_setting", { key: "auto_sync_interval_minutes" });
+        if (AUTO_SYNC_INTERVAL_OPTIONS.some(o => o.value === v)) autoSyncInterval.value = v;
+    } catch { /* not set yet */ }
+    try { lastSyncAt.value = await invoke<string>("get_setting", { key: "last_sync_exported_at" }); } catch { /* not set yet */ }
+    try { autoSyncHasPassword.value = await invoke<boolean>("has_sync_password"); } catch { /* non-critical */ }
+}
+
+async function chooseAutoSyncFolder() {
+    const dir = await open({ directory: true });
+    if (!dir) return;
+    autoSyncFolder.value = dir as string;
+    await invoke("set_setting", { key: "sync_folder_path", value: autoSyncFolder.value });
+}
+
+async function toggleAutoSync(val: boolean) {
+    if (val && (!autoSyncFolder.value || !autoSyncHasPassword.value)) {
+        toast.add({ severity: "warn", summary: "Setup needed", detail: "Choose a sync folder and set a sync password first.", life: 4000 });
+        return;
+    }
+    autoSyncSettingSaving.value = true;
+    try {
+        await invoke("set_setting", { key: "auto_sync_enabled", value: val ? "true" : "false" });
+        autoSyncEnabled.value = val;
+    } finally {
+        autoSyncSettingSaving.value = false;
+    }
+}
+
+async function saveAutoSyncInterval() {
+    autoSyncSettingSaving.value = true;
+    try {
+        await invoke("set_setting", { key: "auto_sync_interval_minutes", value: autoSyncInterval.value });
+        toast.add({ severity: "success", summary: "Saved", detail: "Auto-sync interval updated.", life: 2500 });
+    } finally {
+        autoSyncSettingSaving.value = false;
+    }
+}
+
+async function saveAutoSyncPassword() {
+    if (!autoSyncPwInput.value) return;
+    try {
+        await invoke("set_sync_password", { password: autoSyncPwInput.value });
+        autoSyncHasPassword.value = true;
+        autoSyncPwVisible.value = false;
+        toast.add({ severity: "success", summary: "Sync password set", life: 3000 });
+    } catch (e: any) {
+        toast.add({ severity: "error", summary: "Failed", detail: friendlyError(e, "Couldn't set the sync password. Try again."), life: 4000 });
+    } finally {
+        autoSyncPwInput.value = "";
+    }
+}
+
+async function syncNow() {
+    if (!autoSyncFolder.value || !autoSyncHasPassword.value) {
+        toast.add({ severity: "warn", summary: "Setup needed", detail: "Choose a sync folder and set a sync password first.", life: 4000 });
+        return;
+    }
+    autoSyncNowLoading.value = true;
+    try {
+        const r = await invoke<{ ran: boolean; imported: boolean; exportedAt: string | null }>("sync_now");
+        if (r.exportedAt) lastSyncAt.value = r.exportedAt;
+        toast.add({
+            severity: "success",
+            summary: "Synced",
+            detail: r.imported ? "Pulled newer data from the sync folder and pushed local changes." : "Pushed local changes to the sync folder.",
+            life: 4000,
+        });
+    } catch (e: any) {
+        toast.add({ severity: "error", summary: "Sync failed", detail: friendlyError(e, "Couldn't sync right now. Try again."), life: 5000 });
+    } finally {
+        autoSyncNowLoading.value = false;
     }
 }
 
@@ -330,7 +425,7 @@ async function toggleDummyData(val: boolean) {
             toast.add({ severity: "info", summary: "Dummy data cleared", detail: "All demo records removed.", life: 3000 });
         }
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Failed", detail: String(e?.message ?? e), life: 4000 });
+        toast.add({ severity: "error", summary: "Failed", detail: friendlyError(e, val ? "Couldn't load demo data. Try again." : "Couldn't clear demo data. Try again."), life: 4000 });
     } finally {
         dummyDataLoading.value = false;
     }
@@ -341,6 +436,7 @@ const appDataDir = ref("");
 
 onMounted(async () => {
     await loadLockSetting();
+    await loadAutoSyncSettings();
     await loadDiagnostics();
     try {
         autostartEnabled.value = await isAutostartEnabled();
@@ -513,6 +609,61 @@ getVersion().then(v => appVersion.value = v);
                     :loading="syncLoading && syncMode === 'import'"
                     @click="startSyncImport"
                 />
+            </div>
+
+            <Divider />
+
+            <div class="data-row">
+                <div class="data-row-info">
+                    <span class="data-row-title">Auto Sync</span>
+                    <span class="data-row-desc">
+                        Automatically push/pull an encrypted <code>.svbak</code> snapshot to a folder you sync yourself
+                        (Dropbox, Google Drive, OneDrive, etc.) while {{ APP_NAME }} is running. Edits made on two devices
+                        at the same moment, before the cloud provider finishes syncing, may not both survive.
+                    </span>
+                </div>
+                <ToggleSwitch
+                    :modelValue="autoSyncEnabled"
+                    :disabled="autoSyncSettingSaving"
+                    @update:modelValue="toggleAutoSync"
+                />
+            </div>
+
+            <div class="auto-sync-config">
+                <div class="auto-sync-row">
+                    <span class="auto-sync-label">Sync folder</span>
+                    <div class="auto-sync-control">
+                        <span class="auto-sync-path">{{ autoSyncFolder || "Not set" }}</span>
+                        <Button label="Choose…" size="small" outlined @click="chooseAutoSyncFolder" />
+                    </div>
+                </div>
+                <div class="auto-sync-row">
+                    <span class="auto-sync-label">Sync password</span>
+                    <div class="auto-sync-control">
+                        <span class="auto-sync-path">{{ autoSyncHasPassword ? "Set" : "Not set" }}</span>
+                        <Button label="Set…" size="small" outlined @click="autoSyncPwVisible = true" />
+                    </div>
+                </div>
+                <div class="auto-sync-row">
+                    <span class="auto-sync-label">Check interval</span>
+                    <div class="auto-sync-control">
+                        <Select
+                            v-model="autoSyncInterval"
+                            :options="AUTO_SYNC_INTERVAL_OPTIONS"
+                            optionLabel="label"
+                            optionValue="value"
+                            style="width:150px"
+                        />
+                        <Button label="Save" size="small" :loading="autoSyncSettingSaving" @click="saveAutoSyncInterval" />
+                    </div>
+                </div>
+                <div class="auto-sync-row">
+                    <span class="auto-sync-label">Last synced</span>
+                    <div class="auto-sync-control">
+                        <span class="auto-sync-path">{{ lastSyncAt ? new Date(lastSyncAt).toLocaleString("en-IN") : "Never" }}</span>
+                        <Button label="Sync Now" size="small" icon="pi pi-sync" :loading="autoSyncNowLoading" @click="syncNow" />
+                    </div>
+                </div>
             </div>
 
             <Divider />
@@ -705,6 +856,27 @@ getVersion().then(v => appVersion.value = v);
             />
         </div>
     </Dialog>
+
+    <!-- Auto-sync password dialog -->
+    <Dialog v-model:visible="autoSyncPwVisible" header="Set Sync Password" modal style="width: 380px">
+        <p class="sync-desc">
+            This password protects the shared sync file. Use the same password on every device you sync —
+            it doesn't have to match your master password.
+        </p>
+        <Password
+            v-model="autoSyncPwInput"
+            :feedback="false"
+            toggleMask
+            fluid
+            placeholder="Sync password"
+            autofocus
+            @keydown.enter="saveAutoSyncPassword"
+        />
+        <div class="dialog-footer">
+            <Button label="Cancel" outlined @click="autoSyncPwVisible = false; autoSyncPwInput = ''" />
+            <Button label="Save" :disabled="!autoSyncPwInput" @click="saveAutoSyncPassword" />
+        </div>
+    </Dialog>
 </template>
 
 <style scoped>
@@ -771,6 +943,13 @@ label { font-size: 0.875rem; font-weight: 500; }
 /* Sync dialog */
 .sync-desc { font-size: 0.85rem; color: var(--p-text-muted-color); margin: 0 0 1rem; line-height: 1.5; }
 
+/* Auto sync config sub-rows */
+.auto-sync-config { display: flex; flex-direction: column; gap: 0.6rem; padding: 0.5rem 0 0.25rem 0; }
+.auto-sync-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.auto-sync-label { font-size: 0.85rem; color: var(--p-text-muted-color); flex-shrink: 0; }
+.auto-sync-control { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.auto-sync-path { font-size: 0.83rem; font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+
 /* Developer section */
 .dev-card { border-color: var(--p-orange-200); }
 .dark .dev-card { border-color: var(--p-orange-800); }
@@ -779,5 +958,7 @@ label { font-size: 0.875rem; font-weight: 500; }
     .data-row { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
     .lock-row { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
     .theme-row { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+    .auto-sync-row { flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+    .auto-sync-path { max-width: 100%; }
 }
 </style>

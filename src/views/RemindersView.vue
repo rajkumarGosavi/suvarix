@@ -8,6 +8,7 @@ import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { strToDate, dateToStr } from "@/composables/useDateConvert";
 import { useGamificationSafe } from "@/composables/useGamification";
 import CategoryManagerDialog from "@/components/CategoryManagerDialog.vue";
+import { friendlyError } from "@/utils/errorMessage";
 
 const store = useRemindersStore();
 const categoriesStore = useCategoriesStore();
@@ -90,7 +91,7 @@ async function submitMarkPaid() {
         await checkBadges({ checkDebtDestroyer: payTarget.value.source === "loan" });
         showPayDialog.value = false;
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Failed", detail: String(e?.message ?? e), life: 4000 });
+        toast.add({ severity: "error", summary: "Failed", detail: friendlyError(e, "Couldn't mark this as paid. Try again."), life: 4000 });
     } finally {
         payLoading.value = false;
     }
@@ -131,10 +132,10 @@ async function saveBill() {
         if (editBillId.value) { await store.updateBill(editBillId.value, payload); }
         else { await store.addBill(payload); }
         await store.loadUpcoming(filterDays.value);
-        toast.add({ severity: "success", summary: "Saved", detail: "Bill updated.", life: 2500 });
+        toast.add({ severity: "success", summary: "Saved", detail: "Bill saved.", life: 2500 });
         showBillDialog.value = false;
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Error", detail: String(e?.message ?? e), life: 4000 });
+        toast.add({ severity: "error", summary: "Error", detail: friendlyError(e, "Couldn't save the bill. Try again."), life: 4000 });
     } finally { billLoading.value = false; }
 }
 
@@ -148,7 +149,7 @@ function deleteBill(id: number, name: string) {
         accept: async () => {
             await store.deleteBill(id);
             await store.loadUpcoming(filterDays.value);
-            toast.add({ severity: "success", summary: "Deleted", life: 2000 });
+            toast.add({ severity: "success", summary: "Deleted", detail: "Bill deleted.", life: 2000 });
         },
     });
 }
@@ -199,10 +200,10 @@ async function saveRecur() {
         };
         if (editRecurId.value) { await store.updateRecurring(editRecurId.value, payload); }
         else { await store.addRecurring(payload); }
-        toast.add({ severity: "success", summary: "Saved", life: 2500 });
+        toast.add({ severity: "success", summary: "Saved", detail: "Recurring transaction saved.", life: 2500 });
         showRecurDialog.value = false;
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Error", detail: String(e?.message ?? e), life: 4000 });
+        toast.add({ severity: "error", summary: "Error", detail: friendlyError(e, "Couldn't save the recurring transaction. Try again."), life: 4000 });
     } finally { recurLoading.value = false; }
 }
 
@@ -215,7 +216,7 @@ function deleteRecur(id: number, name: string) {
         acceptProps: { label: "Delete", severity: "danger" },
         accept: async () => {
             await store.deleteRecurring(id);
-            toast.add({ severity: "success", summary: "Deleted", life: 2000 });
+            toast.add({ severity: "success", summary: "Deleted", detail: "Recurring transaction deleted.", life: 2000 });
         },
     });
 }
@@ -237,7 +238,7 @@ async function applySelected() {
         toast.add({ severity: "success", summary: "Applied", detail: `${selectedDueIds.value.length} transaction(s) recorded.`, life: 3000 });
         showApplyDialog.value = false;
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Error", detail: String(e?.message ?? e), life: 4000 });
+        toast.add({ severity: "error", summary: "Error", detail: friendlyError(e, "Couldn't record the due transactions. Try again."), life: 4000 });
     } finally { applyLoading.value = false; }
 }
 
@@ -267,7 +268,7 @@ async function saveMilestone() {
         toast.add({ severity: "success", summary: "Milestone added", life: 2500 });
         showMilestoneDialog.value = false;
     } catch (e: any) {
-        toast.add({ severity: "error", summary: "Error", detail: String(e?.message ?? e), life: 4000 });
+        toast.add({ severity: "error", summary: "Error", detail: friendlyError(e, "Couldn't add the milestone. Try again."), life: 4000 });
     } finally { milestoneLoading.value = false; }
 }
 
@@ -280,7 +281,7 @@ function deleteMilestone(id: number, label: string) {
         acceptProps: { label: "Delete", severity: "danger" },
         accept: async () => {
             await store.deleteMilestone(id);
-            toast.add({ severity: "success", summary: "Deleted", life: 2000 });
+            toast.add({ severity: "success", summary: "Deleted", detail: "Milestone deleted.", life: 2000 });
         },
     });
 }
