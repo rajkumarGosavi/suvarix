@@ -139,7 +139,7 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
     let mut imported = false;
     if Path::new(&file_path).exists() {
         if let Ok(remote_exported_at) = peek_exported_at(app, &file_path, &sync_password) {
-            if last_applied.is_empty() || remote_exported_at > last_applied {
+            if is_remote_newer(&remote_exported_at, &last_applied) {
                 import_sync_backup_impl(app, &file_path, &sync_password, db)?;
                 set_setting(db, SETTING_LAST_EXPORTED_AT, &remote_exported_at)?;
                 imported = true;
@@ -151,4 +151,108 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
     set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
 
     Ok(SyncOutcome { ran: true, imported, exported_at: Some(summary.exported_at) })
+}
+
+/// Last-write-wins staleness check: import only if the remote snapshot's
+/// `exported_at` (RFC 3339) is strictly newer than what this device last
+/// applied/produced. Compared as parsed instants, not strings — devices in
+/// different UTC offsets (old snapshots used local time) would misorder
+/// lexicographically. Falls back to string compare if either side doesn't
+/// parse. An empty `last_applied` means this device has never synced —
+/// always import.
+fn is_remote_newer(remote_exported_at: &str, last_applied: &str) -> bool {
+    if last_applied.is_empty() {
+        return true;
+    }
+    match (
+        chrono::DateTime::parse_from_rfc3339(remote_exported_at),
+        chrono::DateTime::parse_from_rfc3339(last_applied),
+    ) {
+        (Ok(remote), Ok(applied)) => remote > applied,
+        _ => remote_exported_at > last_applied,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────
+// `run_tick`/`spawn_sync_loop` need an `AppHandle` (file IO + event emit),
+// which can't be constructed in tests — see tests/common/mod.rs. Covered
+// here: settings plumbing and the staleness decision the tick hinges on.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::test_db_pool;
+
+    // ── Staleness check ──
+
+    #[test]
+    fn never_synced_device_always_imports() {
+        assert!(is_remote_newer("2026-07-07T10:00:00+05:30", ""));
+    }
+
+    #[test]
+    fn newer_remote_imports_older_or_equal_does_not() {
+        let applied = "2026-07-07T10:00:00+05:30";
+        assert!(is_remote_newer("2026-07-07T10:00:01+05:30", applied));
+        assert!(!is_remote_newer(applied, applied), "same snapshot must not re-import");
+        assert!(
+            !is_remote_newer("2026-07-07T09:59:59+05:30", applied),
+            "older remote must not clobber newer local"
+        );
+    }
+
+    #[test]
+    fn cross_offset_timestamps_compare_as_instants() {
+        // 06:00 UTC == 11:30 IST — newer than 10:00 IST, but lexicographically
+        // smaller ("+00:00" file vs "+05:30"). Must still import.
+        assert!(is_remote_newer("2026-07-07T06:00:00+00:00", "2026-07-07T10:00:00+05:30"));
+        // Reverse: 10:00 IST (04:30 UTC) is older than 06:00 UTC despite
+        // comparing lexicographically greater. Must not import.
+        assert!(!is_remote_newer("2026-07-07T10:00:00+05:30", "2026-07-07T06:00:00+00:00"));
+        // Same instant, different offsets — must not re-import.
+        assert!(!is_remote_newer("2026-07-07T11:30:00+05:30", "2026-07-07T06:00:00+00:00"));
+    }
+
+    #[test]
+    fn unparseable_timestamp_falls_back_to_string_compare() {
+        assert!(is_remote_newer("not-a-date-b", "not-a-date-a"));
+        assert!(!is_remote_newer("not-a-date-a", "not-a-date-b"));
+    }
+
+    // ── Settings plumbing ──
+
+    #[test]
+    fn interval_defaults_when_unset_or_garbage() {
+        let (_dir, db) = test_db_pool();
+        assert_eq!(read_interval_minutes(&db).unwrap(), DEFAULT_INTERVAL_MIN);
+
+        set_setting(&db, SETTING_INTERVAL_MIN, "not-a-number").unwrap();
+        assert_eq!(read_interval_minutes(&db).unwrap(), DEFAULT_INTERVAL_MIN);
+    }
+
+    #[test]
+    fn interval_reads_configured_value() {
+        let (_dir, db) = test_db_pool();
+        set_setting(&db, SETTING_INTERVAL_MIN, "45").unwrap();
+        assert_eq!(read_interval_minutes(&db).unwrap(), 45);
+    }
+
+    #[test]
+    fn set_setting_upserts() {
+        let (_dir, db) = test_db_pool();
+        set_setting(&db, SETTING_LAST_EXPORTED_AT, "first").unwrap();
+        set_setting(&db, SETTING_LAST_EXPORTED_AT, "second").unwrap();
+        let conn = db.get().unwrap();
+        assert_eq!(
+            get_setting(&conn, SETTING_LAST_EXPORTED_AT).unwrap(),
+            Some("second".to_string())
+        );
+    }
+
+    #[test]
+    fn get_setting_returns_none_for_missing_key() {
+        let (_dir, db) = test_db_pool();
+        let conn = db.get().unwrap();
+        assert_eq!(get_setting(&conn, "no-such-key").unwrap(), None);
+    }
 }

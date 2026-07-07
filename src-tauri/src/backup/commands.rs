@@ -83,6 +83,7 @@ pub struct ImportSummary {
 // ── Payload schema ────────────────────────────────────────────
 
 #[derive(serde::Serialize, serde::Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 struct BackupPayload {
     version: u8,
     exported_at: String,
@@ -110,18 +111,31 @@ pub(crate) fn export_sync_backup_impl(
     password: &str,
     db: &DbPool,
 ) -> Result<ExportSummary> {
-    let conn = db.get()?;
+    let (payload, total_rows) = {
+        let conn = db.get()?;
+        build_backup_payload(&conn)?
+    };
+    let exported_at = payload.exported_at.clone();
+    let file = encrypt_backup_bytes(&payload, password)?;
 
-    // Serialize all data tables
+    write_via_fs(app, dest_path, &file)
+        .map_err(|e| AppError::Database(format!("write backup: {e}")))?;
+
+    Ok(ExportSummary { rows_exported: total_rows, exported_at })
+}
+
+/// Snapshots all synced tables + allowed settings into a `BackupPayload`.
+/// Split from `export_sync_backup_impl` so tests can exercise the payload
+/// logic without an `AppHandle` (file IO is the only Tauri-dependent part).
+fn build_backup_payload(conn: &rusqlite::Connection) -> Result<(BackupPayload, usize)> {
     let mut tables: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     let mut total_rows = 0usize;
     for &table in DATA_TABLES {
-        let rows = dump_table(&conn, table)?;
+        let rows = dump_table(conn, table)?;
         total_rows += rows.len();
         tables.insert(table.to_string(), rows);
     }
 
-    // Serialize allowed settings
     let mut settings: HashMap<String, String> = HashMap::new();
     for &key in SYNC_SETTINGS_KEYS {
         if let Ok(val) = conn.query_row(
@@ -133,29 +147,32 @@ pub(crate) fn export_sync_backup_impl(
         }
     }
 
-    let exported_at = chrono::Local::now().to_rfc3339();
-    let payload = BackupPayload { version: FORMAT_VERSION, exported_at: exported_at.clone(), tables, settings };
-    let json_bytes = serde_json::to_vec(&payload)
+    // UTC so timestamps from devices in different offsets compare correctly.
+    let exported_at = chrono::Utc::now().to_rfc3339();
+    Ok((
+        BackupPayload { version: FORMAT_VERSION, exported_at, tables, settings },
+        total_rows,
+    ))
+}
+
+/// Serializes + encrypts a payload into the `.svbak` on-disk byte format:
+/// MAGIC + version + salt + nonce + ciphertext.
+fn encrypt_backup_bytes(payload: &BackupPayload, password: &str) -> Result<Vec<u8>> {
+    let json_bytes = serde_json::to_vec(payload)
         .map_err(|e| AppError::Parse(format!("serialize backup: {e}")))?;
 
-    // Derive key + encrypt
     let salt: [u8; SALT_LEN] = random();
     let nonce_bytes: [u8; NONCE_LEN] = random();
     let key = derive_key(password, &salt);
     let ciphertext = aes_encrypt(&key, &nonce_bytes, &json_bytes)?;
 
-    // Build file bytes: MAGIC + version + salt + nonce + ciphertext
     let mut file = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     file.extend_from_slice(MAGIC);
     file.push(FORMAT_VERSION);
     file.extend_from_slice(&salt);
     file.extend_from_slice(&nonce_bytes);
     file.extend_from_slice(&ciphertext);
-
-    write_via_fs(app, dest_path, &file)
-        .map_err(|e| AppError::Database(format!("write backup: {e}")))?;
-
-    Ok(ExportSummary { rows_exported: total_rows, exported_at })
+    Ok(file)
 }
 
 #[tauri::command]
@@ -177,8 +194,13 @@ pub(crate) fn import_sync_backup_impl(
     db: &DbPool,
 ) -> Result<ImportSummary> {
     let payload = read_backup_payload(app, src_path, password)?;
+    apply_backup_payload(db, &payload)
+}
 
-    // Write to DB
+/// Replaces all synced tables + settings with the payload's contents.
+/// Split from `import_sync_backup_impl` so tests can exercise the DB write
+/// logic without an `AppHandle`.
+fn apply_backup_payload(db: &DbPool, payload: &BackupPayload) -> Result<ImportSummary> {
     let mut conn = db.get()?;
 
     // FK checks off during bulk replace so delete/insert order doesn't matter
@@ -280,7 +302,13 @@ fn read_backup_payload(app: &AppHandle, path: &str, password: &str) -> Result<Ba
         .fs()
         .read(path.parse::<tauri_plugin_fs::FilePath>().unwrap())
         .map_err(|e| AppError::Database(format!("read backup: {e}")))?;
+    decrypt_backup_bytes(&data, password)
+}
 
+/// Validates + decrypts raw `.svbak` bytes into a payload. Inverse of
+/// `encrypt_backup_bytes`; split from `read_backup_payload` so tests can
+/// exercise format validation and crypto without an `AppHandle`.
+fn decrypt_backup_bytes(data: &[u8], password: &str) -> Result<BackupPayload> {
     if data.len() < HEADER_LEN {
         return Err(AppError::Validation(format!("not a valid {APP_NAME} backup file")));
     }
@@ -445,5 +473,258 @@ fn json_to_sql_value(v: &serde_json::Value) -> rusqlite::types::Value {
         }
         serde_json::Value::String(s) => Value::Text(s.clone()),
         _ => Value::Text(v.to_string()),
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────
+// File IO goes through `AppHandle` (tauri-plugin-fs) which can't be
+// constructed in tests (see tests/common/mod.rs on the MockRuntime issue),
+// so tests exercise the split-out pure/DB halves: payload build/apply,
+// `.svbak` byte-format encrypt/decrypt, and sync-password crypto.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::test_db_pool;
+    use rusqlite::params;
+
+    const SYNC_PW: &str = "sync-secret-42";
+    const MASTER_PW: &str = "master-pw";
+
+    fn minimal_payload() -> BackupPayload {
+        let mut tables = HashMap::new();
+        tables.insert(
+            "accounts".to_string(),
+            vec![serde_json::json!({"id": 1, "name": "Bank A", "type": "bank",
+                "provider": null, "external_id": null, "is_active": 1,
+                "created_at": "2026-01-01 00:00:00", "updated_at": "2026-01-01 00:00:00"})],
+        );
+        let mut settings = HashMap::new();
+        settings.insert("theme".to_string(), "dark".to_string());
+        BackupPayload {
+            version: FORMAT_VERSION,
+            exported_at: "2026-07-07T10:00:00+05:30".to_string(),
+            tables,
+            settings,
+        }
+    }
+
+    // ── Sync password crypto ──
+
+    #[test]
+    fn sync_password_encrypt_decrypt_roundtrip() {
+        let enc = encrypt_sync_password(SYNC_PW, MASTER_PW).unwrap();
+        assert_ne!(enc, SYNC_PW);
+        assert_eq!(decrypt_sync_password(&enc, MASTER_PW).unwrap(), SYNC_PW);
+    }
+
+    #[test]
+    fn sync_password_decrypt_fails_with_wrong_master() {
+        let enc = encrypt_sync_password(SYNC_PW, MASTER_PW).unwrap();
+        assert!(decrypt_sync_password(&enc, "wrong-master").is_err());
+    }
+
+    #[test]
+    fn sync_password_decrypt_rejects_malformed_input() {
+        assert!(decrypt_sync_password("not-base64!!!", MASTER_PW).is_err());
+        // Valid base64 but shorter than salt+nonce
+        assert!(decrypt_sync_password(&B64.encode([0u8; 8]), MASTER_PW).is_err());
+    }
+
+    #[test]
+    fn sync_password_encryption_is_salted() {
+        let a = encrypt_sync_password(SYNC_PW, MASTER_PW).unwrap();
+        let b = encrypt_sync_password(SYNC_PW, MASTER_PW).unwrap();
+        assert_ne!(a, b, "fresh salt+nonce per encryption");
+    }
+
+    // ── .svbak byte format ──
+
+    #[test]
+    fn backup_bytes_encrypt_decrypt_roundtrip() {
+        let payload = minimal_payload();
+        let bytes = encrypt_backup_bytes(&payload, SYNC_PW).unwrap();
+        assert_eq!(&bytes[0..4], MAGIC);
+        assert_eq!(bytes[4], FORMAT_VERSION);
+
+        let restored = decrypt_backup_bytes(&bytes, SYNC_PW).unwrap();
+        assert_eq!(restored.exported_at, payload.exported_at);
+        assert_eq!(restored.settings.get("theme").unwrap(), "dark");
+        assert_eq!(restored.tables.get("accounts").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn backup_bytes_decrypt_fails_with_wrong_password() {
+        let bytes = encrypt_backup_bytes(&minimal_payload(), SYNC_PW).unwrap();
+        let err = decrypt_backup_bytes(&bytes, "wrong").unwrap_err();
+        assert!(err.to_string().contains("wrong password"), "got: {err}");
+    }
+
+    #[test]
+    fn backup_bytes_rejects_bad_magic() {
+        let mut bytes = encrypt_backup_bytes(&minimal_payload(), SYNC_PW).unwrap();
+        bytes[0] = b'X';
+        assert!(decrypt_backup_bytes(&bytes, SYNC_PW).is_err());
+    }
+
+    #[test]
+    fn backup_bytes_rejects_unsupported_version() {
+        let mut bytes = encrypt_backup_bytes(&minimal_payload(), SYNC_PW).unwrap();
+        bytes[4] = 99;
+        let err = decrypt_backup_bytes(&bytes, SYNC_PW).unwrap_err();
+        assert!(err.to_string().contains("unsupported backup version"), "got: {err}");
+    }
+
+    #[test]
+    fn backup_bytes_rejects_truncated_file() {
+        assert!(decrypt_backup_bytes(&[0u8; HEADER_LEN - 1], SYNC_PW).is_err());
+    }
+
+    #[test]
+    fn backup_bytes_rejects_tampered_ciphertext() {
+        let mut bytes = encrypt_backup_bytes(&minimal_payload(), SYNC_PW).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        assert!(decrypt_backup_bytes(&bytes, SYNC_PW).is_err(), "AES-GCM must detect tampering");
+    }
+
+    // ── Value conversions ──
+
+    #[test]
+    fn json_to_sql_value_maps_all_types() {
+        use rusqlite::types::Value;
+        assert_eq!(json_to_sql_value(&serde_json::Value::Null), Value::Null);
+        assert_eq!(json_to_sql_value(&serde_json::json!(true)), Value::Integer(1));
+        assert_eq!(json_to_sql_value(&serde_json::json!(42)), Value::Integer(42));
+        assert_eq!(json_to_sql_value(&serde_json::json!(1.5)), Value::Real(1.5));
+        assert_eq!(
+            json_to_sql_value(&serde_json::json!("hi")),
+            Value::Text("hi".to_string())
+        );
+    }
+
+    // ── Payload build/apply against real migrated SQLCipher DBs ──
+
+    fn seed_source_db(db: &crate::db::DbPool) {
+        let conn = db.get().unwrap();
+        conn.execute(
+            "INSERT INTO accounts (name, type) VALUES (?1, ?2)",
+            params!["Source Bank", "bank"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO equity_holdings (account_id, isin, symbol, exchange, name, quantity, avg_buy_price)
+             VALUES (1, 'INE002A01018', 'RELIANCE', 'NSE', 'Reliance Industries', 10.0, 2400.5)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('theme', 'dark')
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [],
+        )
+        .unwrap();
+        // Session token — must NOT leak into the sync payload
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('zerodha_access_token', 'secret-token')
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn build_payload_includes_data_and_allowed_settings_only() {
+        let (_dir, db) = test_db_pool();
+        seed_source_db(&db);
+
+        let conn = db.get().unwrap();
+        let (payload, total_rows) = build_backup_payload(&conn).unwrap();
+
+        // Migrations pre-seed some tables (e.g. default milestones), so
+        // check bookkeeping against the payload itself, not a fixed count.
+        let sum: usize = payload.tables.values().map(|rows| rows.len()).sum();
+        assert_eq!(total_rows, sum, "total_rows must match payload contents");
+        assert_eq!(payload.tables.get("accounts").unwrap().len(), 1);
+        assert_eq!(payload.tables.get("equity_holdings").unwrap().len(), 1);
+        assert_eq!(payload.settings.get("theme").unwrap(), "dark");
+        assert!(
+            !payload.settings.contains_key("zerodha_access_token"),
+            "session tokens must not be exported"
+        );
+        assert!(!payload.exported_at.is_empty());
+    }
+
+    /// Full sync round-trip between two real DBs: device A exports, device B
+    /// imports — B's pre-existing data is replaced, not merged.
+    #[test]
+    fn payload_roundtrip_replaces_target_db_contents() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+
+        // Device B has its own stale data that must be replaced
+        {
+            let conn = db_b.get().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (name, type) VALUES ('Stale Account', 'manual')",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Export → encrypt → decrypt → apply, same path as a real sync minus file IO
+        let (payload, total_rows) = {
+            let conn = db_a.get().unwrap();
+            build_backup_payload(&conn).unwrap()
+        };
+        let bytes = encrypt_backup_bytes(&payload, SYNC_PW).unwrap();
+        let restored = decrypt_backup_bytes(&bytes, SYNC_PW).unwrap();
+        let summary = apply_backup_payload(&db_b, &restored).unwrap();
+
+        assert_eq!(summary.rows_imported, total_rows, "every exported row must be imported");
+        assert!(summary.tables_imported >= 2, "at least accounts + equity_holdings");
+
+        let conn = db_b.get().unwrap();
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM accounts")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(names, vec!["Source Bank"], "stale account replaced, not merged");
+
+        let (symbol, qty): (String, f64) = conn
+            .query_row(
+                "SELECT symbol, quantity FROM equity_holdings",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(symbol, "RELIANCE");
+        assert_eq!(qty, 10.0);
+
+        let theme: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key='theme'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(theme, "dark");
+    }
+
+    #[test]
+    fn apply_payload_restores_fk_enforcement_after_import() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+
+        let (payload, _) = {
+            let conn = db_a.get().unwrap();
+            build_backup_payload(&conn).unwrap()
+        };
+        apply_backup_payload(&db_b, &payload).unwrap();
+
+        let conn = db_b.get().unwrap();
+        let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        assert_eq!(fk, 1, "foreign_keys must be re-enabled after import");
     }
 }
