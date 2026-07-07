@@ -1,8 +1,8 @@
-use tauri::{
-    menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
-    Manager,
-};
+#[cfg(desktop)]
+use tauri::menu::{Menu, MenuItem};
+#[cfg(desktop)]
+use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
 
 pub mod constants;
 pub mod auth;
@@ -35,17 +35,21 @@ use notifications::scheduler::SchedulerState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--hidden"]),
-        ))
+        .plugin(tauri_plugin_process::init());
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec!["--hidden"]),
+    ));
+
+    builder
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -59,54 +63,58 @@ pub fn run() {
             app.manage(SchedulerState::default());
             app.manage(SyncSchedulerState::default());
 
-            // Tray icon — lets the app keep running (and keep notifying) after
-            // the main window is closed instead of quitting the process.
-            let show_item = MenuItem::with_id(app, "show", "Open Suvarix", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-            TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .menu(&menu)
-                .show_menu_on_left_click(true)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+            #[cfg(desktop)]
+            {
+                // Tray icon — lets the app keep running (and keep notifying) after
+                // the main window is closed instead of quitting the process.
+                let show_item =
+                    MenuItem::with_id(app, "show", "Open Suvarix", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+                TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .menu(&menu)
+                    .show_menu_on_left_click(true)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "show" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
                         }
-                    }
-                    "quit" => {
-                        if let Some(scheduler) = app.try_state::<SchedulerState>() {
-                            scheduler.stop();
+                        "quit" => {
+                            if let Some(scheduler) = app.try_state::<SchedulerState>() {
+                                scheduler.stop();
+                            }
+                            if let Some(sync_scheduler) = app.try_state::<SyncSchedulerState>() {
+                                sync_scheduler.stop();
+                            }
+                            if let Some(db) = app.try_state::<DbState>() {
+                                db.0.lock();
+                            }
+                            app.exit(0);
                         }
-                        if let Some(sync_scheduler) = app.try_state::<SyncSchedulerState>() {
-                            sync_scheduler.stop();
-                        }
-                        if let Some(db) = app.try_state::<DbState>() {
-                            db.0.lock();
-                        }
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .build(app)?;
+                        _ => {}
+                    })
+                    .build(app)?;
 
-            // Closing the window hides it to the tray instead of quitting —
-            // the background reminder scheduler keeps running while hidden.
-            if let Some(window) = app.get_webview_window("main") {
-                let win = window.clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = win.hide();
-                    }
-                });
-            }
+                // Closing the window hides it to the tray instead of quitting —
+                // the background reminder scheduler keeps running while hidden.
+                if let Some(window) = app.get_webview_window("main") {
+                    let win = window.clone();
+                    window.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            let _ = win.hide();
+                        }
+                    });
+                }
 
-            // Autostart launches with `--hidden` — don't show the window in that case.
-            if std::env::args().any(|a| a == "--hidden") {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
+                // Autostart launches with `--hidden` — don't show the window in that case.
+                if std::env::args().any(|a| a == "--hidden") {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.hide();
+                    }
                 }
             }
 
