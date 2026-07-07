@@ -64,6 +64,11 @@ body {
     opacity: 0.5;
 }
 
+/* ─── ToggleSwitch: unchecked track blends into dark card bg ── */
+.p-toggleswitch .p-toggleswitch-slider {
+    border: 1px solid var(--p-content-border-color);
+}
+
 /* ─── Mobile overrides (≤639px) ────────────────────────────── */
 @media (max-width: 639px) {
     /* Dialogs: prevent overflow on small screens */

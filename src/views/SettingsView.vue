@@ -907,6 +907,8 @@ label { font-size: 0.875rem; font-weight: 500; }
 /* Data management rows */
 .data-row { display: flex; justify-content: space-between; align-items: center; gap: 1.5rem; padding: 0.25rem 0; }
 .data-row-info { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.data-row > .p-toggleswitch,
+.data-row > .p-button { flex-shrink: 0; }
 .data-row-title { font-size: 0.95rem; font-weight: 500; }
 .data-row-desc { font-size: 0.82rem; line-height: 1.4; color: var(--p-text-muted-color); }
 
