@@ -35,9 +35,12 @@ Suvarix checks for updates automatically and offers to install new versions in-a
 
 When you open Suvarix for the first time you will see the **Setup** screen.
 
-1. Enter a master password (minimum 8 characters).
-2. Re-enter it to confirm.
-3. Click **Set Password**.
+1. Read and tick the **EULA acceptance** checkbox.
+2. Enter a master password (minimum 8 characters).
+3. Re-enter it to confirm.
+4. Click **Set Password**.
+
+> Upgrading from an older version? You'll see a one-time **EULA screen** after unlock — accept to continue, or lock the app.
 
 > Your master password is the encryption key for your database (SQLCipher, AES-256). Write it down and store it safely — if forgotten, the database cannot be decrypted and your data cannot be recovered.
 
@@ -73,6 +76,8 @@ The left sidebar contains all main sections:
 Click the **≡ / ×** button at the top of the sidebar to collapse or expand it. Collapsed mode shows only icons with tooltips on hover.
 
 Click **Lock App** at the bottom of the sidebar to lock immediately.
+
+> **Tray behaviour:** closing the window hides Suvarix to the system tray instead of quitting — background reminder notifications keep working while unlocked. Right-click the tray icon to quit fully. Enable **Launch at login** in Settings to start Suvarix (hidden) with Windows.
 
 ---
 
@@ -621,7 +626,7 @@ A month view that plots all date-driven items in one place, colour-coded by type
 - **FD maturities** (amber) and **bond maturities** (purple)
 - Goal target dates and milestones
 
-Click any day to see its events. Maturity alerts (30-day / 7-day / matured) fire automatically when the app is open — see [Fixed Deposits](#33-fixed-deposits-fd).
+Click any day to see its events. Maturity alerts (30-day / 7-day / matured) fire automatically when the app is open — see [Fixed Deposits](#33-fixed-deposits-fd). While the app is unlocked (even hidden in the tray), a background scheduler also checks bills and maturities every 30 minutes and fires native notifications.
 
 ---
 
@@ -731,6 +736,26 @@ Click **Restore** to replace all current data with a previously saved backup.
 - You will see a confirmation prompt before proceeding.
 - Restart the app after restoring to ensure all views reflect the restored data.
 
+#### Sync Backup (manual, cross-device)
+
+Exports/imports a password-encrypted **`.svbak` snapshot** — a portable copy of all financial data (holdings, transactions, goals, reminders, budgets, broker API keys) for moving between devices. Not the same as Backup Database (raw `.db` copy).
+
+- **Export:** click **Export Sync Backup**, choose a location, set a **sync password** (independent of your master password).
+- **Import:** click **Import Sync Backup**, pick the `.svbak` file, enter its sync password. **This replaces ALL financial data on the device**; your master password is unchanged.
+
+#### Auto Sync (background, via your own cloud folder)
+
+Keeps two or more devices in sync without any Suvarix server:
+
+1. Pick a **sync folder** that a cloud client you already use (Dropbox, Google Drive, OneDrive, Syncthing…) keeps synced across your devices.
+2. Set a **sync password** — it encrypts the snapshot file (AES-256-GCM) and is itself stored encrypted under your master password.
+3. Toggle **Auto Sync on**, optionally adjust the interval (default 30 minutes, minimum 5).
+4. Repeat on your other device with the **same folder and sync password**.
+
+Each tick pulls the folder's `suvarix-sync.svbak` if it's newer than what this device last applied (last-write-wins by export timestamp), then pushes a fresh snapshot. A toast appears only when newer data was actually pulled. **Sync Now** runs a cycle immediately. Sync only runs while the app is unlocked.
+
+> Because sync is last-write-wins on the whole snapshot, avoid entering data on two devices at the same time — the later export wins.
+
 #### Wipe All Data
 
 Permanently deletes all portfolio, transaction, liability, budget, and snapshot records.
@@ -773,7 +798,7 @@ Shows app name, version, data directory path, and privacy statement. The data di
 
 ### Local-Only Storage
 
-All data is stored in a single SQLite database file on your computer, **encrypted at rest with SQLCipher (AES-256)**. Suvarix makes no network requests except when you explicitly click a price refresh, market indices fetch, or broker sync button.
+All data is stored in a single SQLite database file on your computer, **encrypted at rest with SQLCipher (AES-256)**. Suvarix makes no network requests except when you explicitly click a price refresh, market indices fetch, or broker sync button. Auto Sync (if enabled) only writes an encrypted snapshot file to a local folder — any cloud upload is done by your own sync client, never by Suvarix.
 
 ### Master Password
 
@@ -826,5 +851,8 @@ Suvarix does not automatically back up your data. Set a reminder to use **Settin
 | Take net worth snapshot | Reports → Net Worth History → Take Snapshot |
 | Change password | Settings → Security → Change Password |
 | Back up data | Settings → Data Management → Backup |
+| Move data to another device | Settings → Data Management → Sync Backup (export/import `.svbak`) |
+| Keep devices in sync automatically | Settings → Data Management → Auto Sync |
+| Start with Windows / tray | Settings → Launch at login toggle |
 | Export diagnostics for feedback | Settings → Diagnostics → Export |
 | Lock the app | Sidebar → Lock App (bottom) |

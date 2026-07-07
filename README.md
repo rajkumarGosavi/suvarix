@@ -19,7 +19,7 @@ After install, Suvarix checks for updates automatically and prompts you to insta
 
 ## First Launch — Master Password
 
-On first launch you'll be asked to create a **master password**. This password is the encryption key for your database — the entire database file is encrypted at rest (SQLCipher, AES-256). Without the password the file is unreadable.
+On first launch you'll be asked to accept the EULA and create a **master password**. This password is the encryption key for your database — the entire database file is encrypted at rest (SQLCipher, AES-256). Without the password the file is unreadable.
 
 - Minimum 8 characters.
 - If you forget it, data cannot be recovered — there is no reset. The database cannot be decrypted without it.
@@ -256,9 +256,15 @@ Switch between **Light**, **Dark**, and **System** (follows your Windows theme).
 |---|---|
 | Backup Database | Saves a `.db` file you can restore from later |
 | Restore Database | Replaces all data with a backup file |
+| Sync Backup (export/import) | Password-encrypted `.svbak` snapshot for moving data between devices — you choose the file location and a separate sync password |
+| Auto Sync | Point Suvarix at a folder you already sync (Dropbox/Drive/OneDrive); it pushes/pulls an encrypted `.svbak` snapshot in the background on an interval (default 30 min) or via **Sync Now** |
 | Wipe All Data | Permanently deletes all portfolio/transaction data (password and settings are kept) |
 
 Keep regular backups. The database file is stored in `%APPDATA%\com.rajkumar.suvarix\suvarix.db`.
+
+### Notifications & Tray
+
+Suvarix can launch at login (Settings toggle) and sits in the system tray — closing the window hides it instead of quitting. While unlocked, a background scheduler checks bills and FD/bond maturities every 30 minutes and fires native Windows notifications. Your master password is never stored for this; notifications stop when you lock or quit.
 
 ### Diagnostics
 
@@ -277,8 +283,8 @@ Suvarix records usage events, errors, and page load times locally — nothing is
 ## Privacy
 
 - All data is stored in a local SQLite database on your device, encrypted at rest with SQLCipher (AES-256). Your master password is the encryption key.
-- No data is ever sent to any server or cloud service.
-- Broker API credentials are stored only in your local (encrypted) database, additionally encrypted with AES-GCM.
+- No data is ever sent to any server or cloud service run by Suvarix. Optional Auto Sync only writes an encrypted snapshot file into a folder *you* control and sync with your own cloud provider.
+- Broker API credentials are stored only in your local database, protected by the same SQLCipher at-rest encryption as everything else. Note: if you enable Auto Sync, broker API keys are included in the encrypted `.svbak` snapshot.
 - Diagnostic data (if you choose to export and share it) is entirely under your control.
 
 ---
