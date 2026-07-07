@@ -13,7 +13,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_fs::{FsExt, OpenOptions};
 
 use crate::constants::APP_NAME;
-use crate::db::DbState;
+use crate::db::{DbPool, DbState};
 use crate::error::{AppError, Result};
 
 // ── File format ───────────────────────────────────────────────
@@ -99,7 +99,18 @@ pub fn export_sync_backup(
     password: String,
     state: State<DbState>,
 ) -> Result<ExportSummary> {
-    let conn = state.0.get()?;
+    export_sync_backup_impl(&app, &dest_path, &password, &state.0)
+}
+
+/// Shared by the `export_sync_backup` command and the background auto-sync
+/// scheduler (which holds an `Arc<DbPool>` directly, not a command `State`).
+pub(crate) fn export_sync_backup_impl(
+    app: &AppHandle,
+    dest_path: &str,
+    password: &str,
+    db: &DbPool,
+) -> Result<ExportSummary> {
+    let conn = db.get()?;
 
     // Serialize all data tables
     let mut tables: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
@@ -130,7 +141,7 @@ pub fn export_sync_backup(
     // Derive key + encrypt
     let salt: [u8; SALT_LEN] = random();
     let nonce_bytes: [u8; NONCE_LEN] = random();
-    let key = derive_key(&password, &salt);
+    let key = derive_key(password, &salt);
     let ciphertext = aes_encrypt(&key, &nonce_bytes, &json_bytes)?;
 
     // Build file bytes: MAGIC + version + salt + nonce + ciphertext
@@ -141,7 +152,7 @@ pub fn export_sync_backup(
     file.extend_from_slice(&nonce_bytes);
     file.extend_from_slice(&ciphertext);
 
-    write_via_fs(&app, &dest_path, &file)
+    write_via_fs(app, dest_path, &file)
         .map_err(|e| AppError::Database(format!("write backup: {e}")))?;
 
     Ok(ExportSummary { rows_exported: total_rows, exported_at })
@@ -154,34 +165,21 @@ pub fn import_sync_backup(
     password: String,
     state: State<DbState>,
 ) -> Result<ImportSummary> {
-    // Read + validate header
-    let data = app
-        .fs()
-        .read(src_path.parse::<tauri_plugin_fs::FilePath>().unwrap())
-        .map_err(|e| AppError::Database(format!("read backup: {e}")))?;
+    import_sync_backup_impl(&app, &src_path, &password, &state.0)
+}
 
-    if data.len() < HEADER_LEN {
-        return Err(AppError::Validation(format!("not a valid {APP_NAME} backup file")));
-    }
-    if &data[0..4] != MAGIC {
-        return Err(AppError::Validation(format!("not a valid {APP_NAME} backup file")));
-    }
-    if data[4] != FORMAT_VERSION {
-        return Err(AppError::Validation(format!("unsupported backup version {}", data[4])));
-    }
-
-    let salt = &data[5..5 + SALT_LEN];
-    let nonce_bytes = &data[5 + SALT_LEN..HEADER_LEN];
-    let ciphertext = &data[HEADER_LEN..];
-
-    let key = derive_key(&password, salt);
-    let json_bytes = aes_decrypt(&key, nonce_bytes, ciphertext)?;
-
-    let payload: BackupPayload = serde_json::from_slice(&json_bytes)
-        .map_err(|e| AppError::Parse(format!("parse backup: {e}")))?;
+/// Shared by the `import_sync_backup` command and the background auto-sync
+/// scheduler (which holds an `Arc<DbPool>` directly, not a command `State`).
+pub(crate) fn import_sync_backup_impl(
+    app: &AppHandle,
+    src_path: &str,
+    password: &str,
+    db: &DbPool,
+) -> Result<ImportSummary> {
+    let payload = read_backup_payload(app, src_path, password)?;
 
     // Write to DB
-    let mut conn = state.0.get()?;
+    let mut conn = db.get()?;
 
     // FK checks off during bulk replace so delete/insert order doesn't matter
     conn.execute_batch("PRAGMA foreign_keys = OFF")
@@ -226,6 +224,41 @@ pub fn import_sync_backup(
     result
 }
 
+/// Stores the user's sync password, encrypted at rest with the master
+/// password — needed so the background auto-sync scheduler can encrypt/decrypt
+/// `.svbak` files unattended, without prompting the user each tick.
+#[tauri::command]
+pub fn set_sync_password(password: String, state: State<DbState>) -> Result<()> {
+    let master = state.0.current_password()?;
+    let encrypted = encrypt_sync_password(&password, &master)?;
+    let conn = state.0.get()?;
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('sync_password_encrypted', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [&encrypted],
+    )?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn has_sync_password(state: State<DbState>) -> Result<bool> {
+    let conn = state.0.get()?;
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM app_settings WHERE key='sync_password_encrypted'",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok())
+}
+
+/// Runs one auto-sync pull-then-push cycle immediately (manual "Sync now"),
+/// reusing the exact same logic the background scheduler ticks on.
+#[tauri::command]
+pub fn sync_now(app: AppHandle, state: State<DbState>) -> Result<crate::backup::scheduler::SyncOutcome> {
+    crate::backup::scheduler::run_tick(&app, &state.0)
+}
+
 // ── File I/O ──────────────────────────────────────────────────
 // Uses tauri-plugin-fs instead of std::fs because on Android the path
 // picked via the save/open dialog is a content:// SAF URI, which
@@ -237,6 +270,74 @@ fn write_via_fs(app: &AppHandle, path: &str, bytes: &[u8]) -> std::io::Result<()
     opts.write(true).create(true).truncate(true);
     let mut file = app.fs().open(file_path, opts)?;
     file.write_all(bytes)
+}
+
+/// Reads + decrypts a `.svbak` file into its payload. Shared by
+/// `import_sync_backup_impl` and the auto-sync scheduler's staleness check
+/// (which only needs `payload.exported_at`, not a full DB write).
+fn read_backup_payload(app: &AppHandle, path: &str, password: &str) -> Result<BackupPayload> {
+    let data = app
+        .fs()
+        .read(path.parse::<tauri_plugin_fs::FilePath>().unwrap())
+        .map_err(|e| AppError::Database(format!("read backup: {e}")))?;
+
+    if data.len() < HEADER_LEN {
+        return Err(AppError::Validation(format!("not a valid {APP_NAME} backup file")));
+    }
+    if &data[0..4] != MAGIC {
+        return Err(AppError::Validation(format!("not a valid {APP_NAME} backup file")));
+    }
+    if data[4] != FORMAT_VERSION {
+        return Err(AppError::Validation(format!("unsupported backup version {}", data[4])));
+    }
+
+    let salt = &data[5..5 + SALT_LEN];
+    let nonce_bytes = &data[5 + SALT_LEN..HEADER_LEN];
+    let ciphertext = &data[HEADER_LEN..];
+
+    let key = derive_key(password, salt);
+    let json_bytes = aes_decrypt(&key, nonce_bytes, ciphertext)?;
+
+    serde_json::from_slice(&json_bytes).map_err(|e| AppError::Parse(format!("parse backup: {e}")))
+}
+
+/// Peeks a `.svbak` file's `exported_at` without touching the DB — used by
+/// the auto-sync scheduler to decide whether a remote copy is newer than
+/// what this device last applied, before deciding to import it.
+pub(crate) fn peek_exported_at(app: &AppHandle, path: &str, password: &str) -> Result<String> {
+    Ok(read_backup_payload(app, path, password)?.exported_at)
+}
+
+/// Encrypts the user's sync password at rest, keyed by the master password —
+/// same PBKDF2 + AES-256-GCM primitives as the `.svbak` format, just with a
+/// compact `base64(salt || nonce || ciphertext)` encoding instead of a file
+/// header, since this is stored as a single `app_settings` value.
+pub(crate) fn encrypt_sync_password(sync_password: &str, master_password: &str) -> Result<String> {
+    let salt: [u8; SALT_LEN] = random();
+    let nonce_bytes: [u8; NONCE_LEN] = random();
+    let key = derive_key(master_password, &salt);
+    let ciphertext = aes_encrypt(&key, &nonce_bytes, sync_password.as_bytes())?;
+
+    let mut buf = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
+    buf.extend_from_slice(&salt);
+    buf.extend_from_slice(&nonce_bytes);
+    buf.extend_from_slice(&ciphertext);
+    Ok(B64.encode(buf))
+}
+
+pub(crate) fn decrypt_sync_password(encrypted_b64: &str, master_password: &str) -> Result<String> {
+    let buf = B64
+        .decode(encrypted_b64)
+        .map_err(|e| AppError::Validation(format!("bad sync password: {e}")))?;
+    if buf.len() < SALT_LEN + NONCE_LEN {
+        return Err(AppError::Validation("bad sync password".into()));
+    }
+    let salt = &buf[0..SALT_LEN];
+    let nonce_bytes = &buf[SALT_LEN..SALT_LEN + NONCE_LEN];
+    let ciphertext = &buf[SALT_LEN + NONCE_LEN..];
+    let key = derive_key(master_password, salt);
+    let plain = aes_decrypt(&key, nonce_bytes, ciphertext)?;
+    String::from_utf8(plain).map_err(|e| AppError::Validation(format!("bad sync password: {e}")))
 }
 
 // ── Crypto ────────────────────────────────────────────────────

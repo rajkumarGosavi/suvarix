@@ -29,6 +29,7 @@ pub mod gamification;
 #[cfg(test)]
 pub mod test_utils;
 
+use backup::scheduler::SyncSchedulerState;
 use db::DbState;
 use notifications::scheduler::SchedulerState;
 
@@ -56,6 +57,7 @@ pub fn run() {
             let db_state = DbState::new(db_path.to_string_lossy().into_owned());
             app.manage(db_state);
             app.manage(SchedulerState::default());
+            app.manage(SyncSchedulerState::default());
 
             // Tray icon — lets the app keep running (and keep notifying) after
             // the main window is closed instead of quitting the process.
@@ -76,6 +78,9 @@ pub fn run() {
                     "quit" => {
                         if let Some(scheduler) = app.try_state::<SchedulerState>() {
                             scheduler.stop();
+                        }
+                        if let Some(sync_scheduler) = app.try_state::<SyncSchedulerState>() {
+                            sync_scheduler.stop();
                         }
                         if let Some(db) = app.try_state::<DbState>() {
                             db.0.lock();
@@ -211,6 +216,9 @@ pub fn run() {
             // backup / sync
             backup::commands::export_sync_backup,
             backup::commands::import_sync_backup,
+            backup::commands::set_sync_password,
+            backup::commands::has_sync_password,
+            backup::commands::sync_now,
             settings::commands::wipe_all_data,
             settings::commands::get_app_data_dir,
             settings::commands::write_csv,
