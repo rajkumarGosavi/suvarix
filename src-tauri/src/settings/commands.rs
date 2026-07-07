@@ -14,6 +14,7 @@ const DATA_TABLES: &[&str] = &[
     "equity_holdings",
     "mf_holdings",
     "fd_holdings",
+    "bond_holdings",
     "ppf_epf_holdings",
     "real_estate_holdings",
     "gold_holdings",

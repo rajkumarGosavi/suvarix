@@ -184,7 +184,6 @@ watch(route, () => { drawerOpen.value = false; });
     </div>
 
     <Toast position="bottom-right" />
-    <ConfirmDialog />
 </template>
 
 <style scoped>
