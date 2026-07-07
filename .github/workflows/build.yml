@@ -112,8 +112,6 @@ jobs:
 
       - name: install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -175,8 +173,6 @@ jobs:
           ref: ${{ inputs.branch }}
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
@@ -251,8 +247,6 @@ jobs:
           ref: ${{ inputs.branch }}
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
