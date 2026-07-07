@@ -101,7 +101,7 @@ pub fn get_monthly_trend(months: i64, state: State<DbState>) -> Result<Vec<Month
                 SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as income,
                 SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) as expense
          FROM transactions
-         WHERE date >= date('now', '-' || ?1 || ' months')
+         WHERE ?1 <= 0 OR date >= date('now', '-' || ?1 || ' months')
          GROUP BY month ORDER BY month DESC"
     )?;
     let rows = stmt.query_map([months], |r| Ok(MonthlyTrend {

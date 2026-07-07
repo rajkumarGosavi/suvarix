@@ -31,6 +31,7 @@ export const useBudgetStore = defineStore("budget", {
         currentPeriod: "this_month",
         currentCustomStart: null as string | null,
         currentCustomEnd: null as string | null,
+        trendMonths: 12,
     }),
 
     actions: {
@@ -43,7 +44,7 @@ export const useBudgetStore = defineStore("budget", {
                 const [summary, budgets, trend] = await Promise.all([
                     invoke<CategorySummary[]>("get_category_summary", { period, customStart, customEnd }),
                     invoke<BudgetStatus[]>("get_budget_status"),
-                    invoke<MonthlyTrend[]>("get_monthly_trend", { months: 12 }),
+                    invoke<MonthlyTrend[]>("get_monthly_trend", { months: this.trendMonths }),
                 ]);
                 this.categorySummary = summary;
                 this.budgetStatus = budgets;
@@ -51,6 +52,11 @@ export const useBudgetStore = defineStore("budget", {
             } finally {
                 this.isLoading = false;
             }
+        },
+
+        async fetchTrend(months: number) {
+            this.trendMonths = months;
+            this.monthlyTrend = await invoke<MonthlyTrend[]>("get_monthly_trend", { months });
         },
 
         async setBudget(category: string, monthlyLimit: number) {

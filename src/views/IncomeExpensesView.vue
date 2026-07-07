@@ -36,6 +36,19 @@ const selectedPeriod = ref("this_month");
 const customFrom = ref<Date | null>(null);
 const customTo = ref<Date | null>(null);
 
+const TREND_RANGES = [
+    { label: "12 Months", value: 12 },
+    { label: "24 Months", value: 24 },
+    { label: "36 Months", value: 36 },
+    { label: "All Time", value: 0 },
+];
+const selectedTrendMonths = ref(12);
+
+function changeTrendRange(value: number) {
+    selectedTrendMonths.value = value;
+    store.fetchTrend(value);
+}
+
 function changePeriod(value: string) {
     selectedPeriod.value = value;
     if (value !== "custom") {
@@ -190,7 +203,17 @@ onMounted(() => {
 
             <!-- Monthly trend bar chart -->
             <div class="card" v-if="store.monthlyTrend.length > 0">
-                <h3>Monthly Trend</h3>
+                <div class="trend-header">
+                    <h3>Monthly Trend</h3>
+                    <Select
+                        v-model="selectedTrendMonths"
+                        :options="TREND_RANGES"
+                        optionLabel="label"
+                        optionValue="value"
+                        @change="changeTrendRange(selectedTrendMonths)"
+                        style="width:140px"
+                    />
+                </div>
                 <div class="chart-wrap">
                     <Bar :data="trendChartData" :options="trendChartOptions" />
                 </div>
@@ -304,6 +327,8 @@ onMounted(() => {
 
 .card { border-radius: 12px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; background: var(--p-content-background); border: 1px solid var(--p-content-border-color); }
 .card h3 { margin: 0 0 1rem; font-size: 1rem; font-weight: 600; }
+.trend-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+.trend-header h3 { margin: 0; }
 .chart-wrap { height: 260px; }
 
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
