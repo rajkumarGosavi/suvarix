@@ -14,9 +14,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::backup::commands::decrypt_sync_password;
 #[cfg(not(target_os = "android"))]
-use crate::backup::commands::{
-    export_sync_backup_impl, import_sync_backup_impl, peek_exported_at, SYNC_FILENAME,
-};
+use crate::backup::commands::{export_sync_backup_impl, import_sync_backup_impl, SYNC_FILENAME};
 #[cfg(target_os = "android")]
 use crate::backup::commands::{android_export_sync_backup, android_import_sync_backup, android_peek_exported_at};
 use crate::db::DbPool;
@@ -117,18 +115,18 @@ fn set_setting(db: &DbPool, key: &str, value: &str) -> Result<()> {
 /// manual "Sync now" command — same logic either way, only the caller and
 /// cadence differ.
 ///
-/// Import only runs if the remote file's embedded `exported_at` is newer
-/// than what this device last applied/produced — otherwise an unattended
-/// tick could clobber a fresher local copy that hasn't finished propagating
-/// to this device with an older remote one still sitting in the folder.
+/// Import always runs when a remote file exists: `import_sync_backup_impl`
+/// merges per-row by `sync_id` (see `backup::commands`) rather than replacing
+/// the whole DB, so re-importing an unchanged or stale remote snapshot is a
+/// safe no-op — there's no longer a reason to gate it on a file-level
+/// "is the remote newer" timestamp check the way wholesale-replace needed.
 pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
-    let (enabled, folder, password_enc, last_applied) = {
+    let (enabled, folder, password_enc) = {
         let conn = db.get()?;
         (
             get_setting(&conn, SETTING_ENABLED)?.unwrap_or_default(),
             get_setting(&conn, SETTING_FOLDER)?.unwrap_or_default(),
             get_setting(&conn, SETTING_PASSWORD_ENC)?.unwrap_or_default(),
-            get_setting(&conn, SETTING_LAST_EXPORTED_AT)?.unwrap_or_default(),
         )
     };
 
@@ -144,12 +142,9 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
     #[cfg(target_os = "android")]
     {
         let mut imported = false;
-        if let Some(remote_exported_at) = android_peek_exported_at(app, &folder, &sync_password)? {
-            if is_remote_newer(&remote_exported_at, &last_applied) {
-                android_import_sync_backup(app, &folder, &sync_password, db)?;
-                set_setting(db, SETTING_LAST_EXPORTED_AT, &remote_exported_at)?;
-                imported = true;
-            }
+        if android_peek_exported_at(app, &folder, &sync_password)?.is_some() {
+            let summary = android_import_sync_backup(app, &folder, &sync_password, db)?;
+            imported = summary.rows_imported > 0 || summary.tables_imported > 0;
         }
 
         let summary = android_export_sync_backup(app, &folder, &sync_password, db)?;
@@ -164,13 +159,8 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
 
         let mut imported = false;
         if Path::new(&file_path).exists() {
-            if let Ok(remote_exported_at) = peek_exported_at(app, &file_path, &sync_password) {
-                if is_remote_newer(&remote_exported_at, &last_applied) {
-                    import_sync_backup_impl(app, &file_path, &sync_password, db)?;
-                    set_setting(db, SETTING_LAST_EXPORTED_AT, &remote_exported_at)?;
-                    imported = true;
-                }
-            }
+            let summary = import_sync_backup_impl(app, &file_path, &sync_password, db)?;
+            imported = summary.rows_imported > 0 || summary.tables_imported > 0;
         }
 
         let summary = export_sync_backup_impl(app, &file_path, &sync_password, db)?;
@@ -180,71 +170,16 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
     }
 }
 
-/// Last-write-wins staleness check: import only if the remote snapshot's
-/// `exported_at` (RFC 3339) is strictly newer than what this device last
-/// applied/produced. Compared as parsed instants, not strings — devices in
-/// different UTC offsets (old snapshots used local time) would misorder
-/// lexicographically. Falls back to string compare if either side doesn't
-/// parse. An empty `last_applied` means this device has never synced —
-/// always import.
-fn is_remote_newer(remote_exported_at: &str, last_applied: &str) -> bool {
-    if last_applied.is_empty() {
-        return true;
-    }
-    match (
-        chrono::DateTime::parse_from_rfc3339(remote_exported_at),
-        chrono::DateTime::parse_from_rfc3339(last_applied),
-    ) {
-        (Ok(remote), Ok(applied)) => remote > applied,
-        _ => remote_exported_at > last_applied,
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────
 // `run_tick`/`spawn_sync_loop` need an `AppHandle` (file IO + event emit),
 // which can't be constructed in tests — see tests/common/mod.rs. Covered
-// here: settings plumbing and the staleness decision the tick hinges on.
+// here: settings plumbing. The staleness/merge decision now lives per-row in
+// `backup::commands::apply_backup_payload_merge`, tested there.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::test_db_pool;
-
-    // ── Staleness check ──
-
-    #[test]
-    fn never_synced_device_always_imports() {
-        assert!(is_remote_newer("2026-07-07T10:00:00+05:30", ""));
-    }
-
-    #[test]
-    fn newer_remote_imports_older_or_equal_does_not() {
-        let applied = "2026-07-07T10:00:00+05:30";
-        assert!(is_remote_newer("2026-07-07T10:00:01+05:30", applied));
-        assert!(!is_remote_newer(applied, applied), "same snapshot must not re-import");
-        assert!(
-            !is_remote_newer("2026-07-07T09:59:59+05:30", applied),
-            "older remote must not clobber newer local"
-        );
-    }
-
-    #[test]
-    fn cross_offset_timestamps_compare_as_instants() {
-        // 06:00 UTC == 11:30 IST — newer than 10:00 IST, but lexicographically
-        // smaller ("+00:00" file vs "+05:30"). Must still import.
-        assert!(is_remote_newer("2026-07-07T06:00:00+00:00", "2026-07-07T10:00:00+05:30"));
-        // Reverse: 10:00 IST (04:30 UTC) is older than 06:00 UTC despite
-        // comparing lexicographically greater. Must not import.
-        assert!(!is_remote_newer("2026-07-07T10:00:00+05:30", "2026-07-07T06:00:00+00:00"));
-        // Same instant, different offsets — must not re-import.
-        assert!(!is_remote_newer("2026-07-07T11:30:00+05:30", "2026-07-07T06:00:00+00:00"));
-    }
-
-    #[test]
-    fn unparseable_timestamp_falls_back_to_string_compare() {
-        assert!(is_remote_newer("not-a-date-b", "not-a-date-a"));
-        assert!(!is_remote_newer("not-a-date-a", "not-a-date-b"));
-    }
 
     // ── Settings plumbing ──
 

@@ -15,13 +15,18 @@ use tauri_plugin_fs::{FsExt, OpenOptions};
 use tauri_plugin_android_fs::{AndroidFsExt, Entry, FsUri};
 
 use crate::constants::APP_NAME;
+use crate::db::migrations::SYNC_TABLES;
 use crate::db::{DbPool, DbState};
 use crate::error::{AppError, Result};
 
 // ── File format ───────────────────────────────────────────────
 
 const MAGIC: &[u8; 4] = b"FFBK";
-const FORMAT_VERSION: u8 = 1;
+// v1: wholesale table replace (see `apply_backup_payload_replace`) — kept for
+// reading files exported by a not-yet-updated device during a version transition.
+// v2: per-row merge keyed by `sync_id`, with FK id-remapping and tombstones (see
+// `apply_backup_payload_merge`). New exports always write v2.
+const FORMAT_VERSION: u8 = 2;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN; // 33
@@ -29,33 +34,6 @@ const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN; // 33
 /// Filename the auto-sync scheduler writes/reads inside the user's chosen
 /// sync folder (desktop) or SAF tree (Android). Shared with `backup::scheduler`.
 pub(crate) const SYNC_FILENAME: &str = "suvarix-sync.svbak";
-
-// ── Sync scope ────────────────────────────────────────────────
-
-// FK-safe INSERT order: accounts before anything that references it
-const DATA_TABLES: &[&str] = &[
-    "accounts",
-    "equity_holdings",
-    "mf_holdings",
-    "sip_schedules",
-    "fd_holdings",
-    "ppf_epf_holdings",
-    "real_estate_holdings",
-    "gold_holdings",
-    "crypto_holdings",
-    "insurance_holdings",
-    "bond_holdings",
-    "loans",
-    "credit_cards",
-    "transactions",
-    "budgets",
-    "net_worth_snapshots",
-    "import_log",
-    "goals",
-    "bills",
-    "recurring_transactions",
-    "milestones",
-];
 
 // Excludes: password_hash, password_salt (auth), *_access_token/*_token_date (session)
 const SYNC_SETTINGS_KEYS: &[&str] = &[
@@ -88,6 +66,17 @@ pub struct ImportSummary {
 
 // ── Payload schema ────────────────────────────────────────────
 
+/// A `(table, sync_id)` that was deleted on some device, with when — carried in
+/// the payload so an importing device can tell "deleted elsewhere" apart from
+/// "never had this row" during merge. See `migration_019_sync_infra`.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[cfg_attr(test, derive(Debug))]
+struct TombstoneRow {
+    table_name: String,
+    sync_id: String,
+    deleted_at: String,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[cfg_attr(test, derive(Debug))]
 struct BackupPayload {
@@ -95,6 +84,9 @@ struct BackupPayload {
     exported_at: String,
     tables: HashMap<String, Vec<serde_json::Value>>,
     settings: HashMap<String, String>,
+    // Missing entirely in v1 files (pre-merge-support exports) — default to empty.
+    #[serde(default)]
+    tombstones: Vec<TombstoneRow>,
 }
 
 // ── Commands ─────────────────────────────────────────────────
@@ -136,7 +128,7 @@ pub(crate) fn export_sync_backup_impl(
 fn build_backup_payload(conn: &rusqlite::Connection) -> Result<(BackupPayload, usize)> {
     let mut tables: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     let mut total_rows = 0usize;
-    for &table in DATA_TABLES {
+    for &table in SYNC_TABLES {
         let rows = dump_table(conn, table)?;
         total_rows += rows.len();
         tables.insert(table.to_string(), rows);
@@ -153,10 +145,26 @@ fn build_backup_payload(conn: &rusqlite::Connection) -> Result<(BackupPayload, u
         }
     }
 
+    let tombstones = {
+        let mut stmt = conn
+            .prepare("SELECT table_name, sync_id, deleted_at FROM sync_tombstones")
+            .map_err(|e| AppError::Database(format!("prepare tombstones: {e}")))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(TombstoneRow {
+                    table_name: r.get(0)?,
+                    sync_id: r.get(1)?,
+                    deleted_at: r.get(2)?,
+                })
+            })
+            .map_err(|e| AppError::Database(format!("dump tombstones: {e}")))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
     // UTC so timestamps from devices in different offsets compare correctly.
     let exported_at = chrono::Utc::now().to_rfc3339();
     Ok((
-        BackupPayload { version: FORMAT_VERSION, exported_at, tables, settings },
+        BackupPayload { version: FORMAT_VERSION, exported_at, tables, settings, tombstones },
         total_rows,
     ))
 }
@@ -203,10 +211,23 @@ pub(crate) fn import_sync_backup_impl(
     apply_backup_payload(db, &payload)
 }
 
-/// Replaces all synced tables + settings with the payload's contents.
-/// Split from `import_sync_backup_impl` so tests can exercise the DB write
-/// logic without an `AppHandle`.
+/// Applies an imported payload, branching on the format version it was
+/// exported with: pre-merge-support (v1) files still get the old wholesale
+/// replace (they can't be merged — the exporting device never wrote `sync_id`s
+/// or tombstones); anything else goes through the per-row merge.
 fn apply_backup_payload(db: &DbPool, payload: &BackupPayload) -> Result<ImportSummary> {
+    if payload.version < 2 {
+        apply_backup_payload_replace(db, payload)
+    } else {
+        apply_backup_payload_merge(db, payload)
+    }
+}
+
+/// Replaces all synced tables + settings with the payload's contents. Kept
+/// only for reading v1 (`FORMAT_VERSION` before merge support) exports from a
+/// device that hasn't updated yet — new exports never use this path since it
+/// wipes anything the importing device added that the exporter never saw.
+fn apply_backup_payload_replace(db: &DbPool, payload: &BackupPayload) -> Result<ImportSummary> {
     let mut conn = db.get()?;
 
     // FK checks off during bulk replace so delete/insert order doesn't matter
@@ -216,13 +237,13 @@ fn apply_backup_payload(db: &DbPool, payload: &BackupPayload) -> Result<ImportSu
     let result = (|| -> Result<ImportSummary> {
         let tx = conn.transaction()?;
 
-        for &table in DATA_TABLES {
+        for &table in SYNC_TABLES {
             tx.execute(&format!("DELETE FROM \"{table}\""), [])?;
         }
 
         let mut total_rows = 0usize;
         let mut tables_imported = 0usize;
-        for &table in DATA_TABLES {
+        for &table in SYNC_TABLES {
             if let Some(rows) = payload.tables.get(table) {
                 if !rows.is_empty() {
                     let n = restore_table(&tx, table, rows)?;
@@ -249,6 +270,298 @@ fn apply_backup_payload(db: &DbPool, payload: &BackupPayload) -> Result<ImportSu
     // Always restore FK enforcement
     let _ = conn.execute_batch("PRAGMA foreign_keys = ON");
 
+    result
+}
+
+// ── Merge (v2) ────────────────────────────────────────────────
+//
+// Union, not replace: for each table (in `SYNC_TABLES`'s FK-safe order), match
+// remote rows to local rows by `sync_id` (stable across devices, unlike the
+// local `INTEGER PRIMARY KEY`), keep whichever side has the newer
+// `sync_updated_at`, and insert whatever the other device has that this one
+// doesn't. FK columns (`account_id`, `mf_holding_id`, `transactions.holding_id`)
+// hold the *exporting* device's local ids, so every row is rewritten through an
+// `remote_id -> this_device_local_id` map built table-by-table as we go —
+// `SYNC_TABLES` orders parents before children so every FK a row can carry
+// already has a complete map by the time that row is processed. Tombstones
+// (`payload.tombstones`) are applied last, deleting local rows an
+// at-least-as-recent remote delete targets, so a row deleted on one device
+// doesn't get silently resurrected by the next union.
+
+/// FK columns each table's rows carry, as `(column, referenced synced table,
+/// required)` — used to translate a remote device's local ids into this
+/// device's local ids during merge. `required` rows are skipped entirely (not
+/// written with a dangling reference) if the referenced parent isn't present on
+/// this device (e.g. tombstoned here and not resurrected); optional ones just
+/// get set to `NULL`. `transactions.holding_id` is polymorphic (depends on the
+/// row's `asset_class`) and is handled separately in `remap_row_fks`.
+fn fk_columns(table: &str) -> &'static [(&'static str, &'static str, bool)] {
+    match table {
+        "equity_holdings" | "mf_holdings" => &[("account_id", "accounts", true)],
+        "sip_schedules" => {
+            &[("account_id", "accounts", true), ("mf_holding_id", "mf_holdings", false)]
+        }
+        "fd_holdings" | "gold_holdings" | "crypto_holdings" | "bond_holdings" => {
+            &[("account_id", "accounts", false)]
+        }
+        "transactions" => &[("account_id", "accounts", false)],
+        _ => &[],
+    }
+}
+
+/// Which synced table `transactions.holding_id` points into, based on the
+/// row's `asset_class` — that FK is polymorphic, unlike every other one.
+fn holding_table_for_asset_class(asset_class: &str) -> Option<&'static str> {
+    match asset_class {
+        "equity" => Some("equity_holdings"),
+        "mf" => Some("mf_holdings"),
+        "fd" => Some("fd_holdings"),
+        "ppf_epf" => Some("ppf_epf_holdings"),
+        "real_estate" => Some("real_estate_holdings"),
+        "gold" => Some("gold_holdings"),
+        "crypto" => Some("crypto_holdings"),
+        "insurance" => Some("insurance_holdings"),
+        "loan" => Some("loans"),
+        "credit_card" => Some("credit_cards"),
+        _ => None,
+    }
+}
+
+/// Rewrites every FK column in `row` (a remote-exported row, about to be
+/// inserted/updated locally) from the remote device's local ids to this
+/// device's, using the `remote_id -> local_id` maps built so far. Returns
+/// `false` if a *required* FK's parent hasn't been merged on this device —
+/// the row must be skipped, not written with a dangling reference.
+fn remap_row_fks(
+    table: &str,
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    id_maps: &HashMap<&'static str, HashMap<i64, i64>>,
+) -> bool {
+    for &(col, ref_table, required) in fk_columns(table) {
+        let Some(remote_id) = row.get(col).and_then(|v| v.as_i64()) else { continue };
+        match id_maps.get(ref_table).and_then(|m| m.get(&remote_id)).copied() {
+            Some(local_id) => {
+                row.insert(col.to_string(), serde_json::json!(local_id));
+            }
+            None if required => return false,
+            None => {
+                row.insert(col.to_string(), serde_json::Value::Null);
+            }
+        }
+    }
+    if table == "transactions" {
+        if let Some(remote_holding_id) = row.get("holding_id").and_then(|v| v.as_i64()) {
+            let asset_class = row.get("asset_class").and_then(|v| v.as_str()).unwrap_or("");
+            let mapped = holding_table_for_asset_class(asset_class)
+                .and_then(|t| id_maps.get(t))
+                .and_then(|m| m.get(&remote_holding_id))
+                .copied();
+            row.insert(
+                "holding_id".to_string(),
+                mapped.map(|id| serde_json::json!(id)).unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
+    true
+}
+
+fn random_sync_id() -> String {
+    let bytes: [u8; 16] = random();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `UPDATE table SET col=?, ... WHERE id = ?` over every column in `row` except
+/// `id` — mirrors `restore_table`'s generic column handling but for a targeted
+/// single-row update instead of a bulk insert.
+fn update_row_by_id(
+    tx: &rusqlite::Transaction<'_>,
+    table: &str,
+    id: i64,
+    row: &serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    let cols: Vec<&String> = row.keys().filter(|k| k.as_str() != "id").collect();
+    if cols.is_empty() {
+        return Ok(());
+    }
+    let set_clause = cols
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("\"{c}\" = ?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("UPDATE \"{table}\" SET {set_clause} WHERE id = ?{}", cols.len() + 1);
+    let mut params: Vec<rusqlite::types::Value> =
+        cols.iter().map(|c| json_to_sql_value(row.get(*c).unwrap())).collect();
+    params.push(rusqlite::types::Value::Integer(id));
+    tx.execute(&sql, rusqlite::params_from_iter(params))
+        .map_err(|e| AppError::Database(format!("update {table}: {e}")))?;
+    Ok(())
+}
+
+/// `INSERT INTO table (...) VALUES (...)` over every column in `row` except
+/// `id` (left for AUTOINCREMENT to assign), returning the new local id — or
+/// `None` if the insert hit a UNIQUE constraint. That happens when both
+/// devices independently seeded identical content under different `sync_id`s
+/// (e.g. the default milestone rows, unique on `amount`, backfilled with a
+/// fresh random `sync_id` per device at migration time) — the row already
+/// exists in substance, just not by `sync_id`, so skipping it is correct
+/// rather than failing the whole merge.
+fn insert_row_new_id(
+    tx: &rusqlite::Transaction<'_>,
+    table: &str,
+    row: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Option<i64>> {
+    let cols: Vec<&String> = row.keys().filter(|k| k.as_str() != "id").collect();
+    let col_list = cols.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", ");
+    let placeholders = (1..=cols.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+    let sql = format!("INSERT INTO \"{table}\" ({col_list}) VALUES ({placeholders})");
+    let params: Vec<rusqlite::types::Value> =
+        cols.iter().map(|c| json_to_sql_value(row.get(*c).unwrap())).collect();
+    match tx.execute(&sql, rusqlite::params_from_iter(params)) {
+        Ok(_) => Ok(Some(tx.last_insert_rowid())),
+        Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+            if msg.contains("UNIQUE constraint failed") =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(AppError::Database(format!("insert into {table}: {e}"))),
+    }
+}
+
+fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<ImportSummary> {
+    let mut conn = db.get()?;
+    conn.execute_batch("PRAGMA foreign_keys = OFF")
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+    let result = (|| -> Result<ImportSummary> {
+        let tx = conn.transaction()?;
+        let mut id_maps: HashMap<&'static str, HashMap<i64, i64>> = HashMap::new();
+        let mut total_rows = 0usize;
+        let mut tables_touched = 0usize;
+
+        for &table in SYNC_TABLES {
+            id_maps.entry(table).or_default();
+            let remote_rows = payload.tables.get(table).cloned().unwrap_or_default();
+            if remote_rows.is_empty() {
+                continue;
+            }
+
+            let local_rows = dump_table(&tx, table)?;
+            let mut local_by_sync_id: HashMap<String, (i64, serde_json::Value)> = HashMap::new();
+            for row in local_rows {
+                if let (Some(sid), Some(id)) = (
+                    row.get("sync_id").and_then(|v| v.as_str()),
+                    row.get("id").and_then(|v| v.as_i64()),
+                ) {
+                    local_by_sync_id.insert(sid.to_string(), (id, row));
+                }
+            }
+
+            let mut tombstoned: HashMap<String, String> = HashMap::new();
+            {
+                let mut stmt = tx
+                    .prepare("SELECT sync_id, deleted_at FROM sync_tombstones WHERE table_name = ?1")
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                let rows = stmt
+                    .query_map([table], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .map_err(|e| AppError::Database(e.to_string()))?;
+                for row in rows.flatten() {
+                    tombstoned.insert(row.0, row.1);
+                }
+            }
+
+            let mut touched_this_table = false;
+
+            for remote_row in remote_rows {
+                let Some(mut obj) = remote_row.as_object().cloned() else { continue };
+                let Some(remote_id) = obj.get("id").and_then(|v| v.as_i64()) else { continue };
+                let sync_id = obj
+                    .get("sync_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(random_sync_id);
+                let remote_updated =
+                    obj.get("sync_updated_at").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+
+                if !remap_row_fks(table, &mut obj, &id_maps) {
+                    continue; // required parent not present on this device — skip
+                }
+                obj.insert("sync_id".to_string(), serde_json::Value::String(sync_id.clone()));
+
+                if let Some((local_id, local_row)) = local_by_sync_id.get(&sync_id) {
+                    let local_id = *local_id;
+                    id_maps.get_mut(table).unwrap().insert(remote_id, local_id);
+                    let local_updated =
+                        local_row.get("sync_updated_at").and_then(|v| v.as_str()).unwrap_or_default();
+                    if remote_updated.as_str() > local_updated {
+                        update_row_by_id(&tx, table, local_id, &obj)?;
+                        touched_this_table = true;
+                        total_rows += 1;
+                    }
+                    continue;
+                }
+
+                if let Some(deleted_at) = tombstoned.get(&sync_id) {
+                    if deleted_at.as_str() >= remote_updated.as_str() {
+                        continue; // deleted here at least as recently — don't resurrect
+                    }
+                }
+
+                if let Some(new_id) = insert_row_new_id(&tx, table, &obj)? {
+                    id_maps.get_mut(table).unwrap().insert(remote_id, new_id);
+                    touched_this_table = true;
+                    total_rows += 1;
+                }
+            }
+
+            if touched_this_table {
+                tables_touched += 1;
+            }
+        }
+
+        // Tombstones last: delete local rows an at-least-as-recent remote delete
+        // targets (fires this table's own tombstone trigger, upserting a local
+        // record so a future export tells other devices too), then fold the
+        // remote tombstone list into ours either way, keeping the newer
+        // `deleted_at` if we already knew about this delete.
+        for t in &payload.tombstones {
+            let existing: Option<(i64, String)> = tx
+                .query_row(
+                    &format!("SELECT id, sync_updated_at FROM \"{}\" WHERE sync_id = ?1", t.table_name),
+                    [&t.sync_id],
+                    |r| Ok((r.get(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())),
+                )
+                .ok();
+            if let Some((local_id, local_updated)) = existing {
+                if t.deleted_at.as_str() >= local_updated.as_str() {
+                    tx.execute(&format!("DELETE FROM \"{}\" WHERE id = ?1", t.table_name), [local_id])
+                        .map_err(|e| AppError::Database(format!("apply tombstone: {e}")))?;
+                }
+            }
+            tx.execute(
+                "INSERT INTO sync_tombstones (table_name, sync_id, deleted_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(table_name, sync_id) DO UPDATE SET deleted_at = excluded.deleted_at
+                 WHERE excluded.deleted_at > sync_tombstones.deleted_at",
+                rusqlite::params![t.table_name, t.sync_id, t.deleted_at],
+            )
+            .map_err(|e| AppError::Database(format!("merge tombstone: {e}")))?;
+        }
+
+        for key in SYNC_SETTINGS_KEYS {
+            if let Some(val) = payload.settings.get(*key) {
+                tx.execute(
+                    "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [key, val.as_str()],
+                )?;
+            }
+        }
+
+        tx.commit()?;
+        Ok(ImportSummary { rows_imported: total_rows, tables_imported: tables_touched })
+    })();
+
+    let _ = conn.execute_batch("PRAGMA foreign_keys = ON");
     result
 }
 
@@ -436,7 +749,10 @@ fn decrypt_backup_bytes(data: &[u8], password: &str) -> Result<BackupPayload> {
     if &data[0..4] != MAGIC {
         return Err(AppError::Validation(format!("not a valid {APP_NAME} backup file")));
     }
-    if data[4] != FORMAT_VERSION {
+    // Accept older formats (e.g. v1 wholesale-replace, from a not-yet-updated
+    // device) alongside the current one — only reject a version newer than this
+    // binary understands. `apply_backup_payload` branches on `payload.version`.
+    if data[4] > FORMAT_VERSION {
         return Err(AppError::Validation(format!("unsupported backup version {}", data[4])));
     }
 
@@ -448,13 +764,6 @@ fn decrypt_backup_bytes(data: &[u8], password: &str) -> Result<BackupPayload> {
     let json_bytes = aes_decrypt(&key, nonce_bytes, ciphertext)?;
 
     serde_json::from_slice(&json_bytes).map_err(|e| AppError::Parse(format!("parse backup: {e}")))
-}
-
-/// Peeks a `.svbak` file's `exported_at` without touching the DB — used by
-/// the auto-sync scheduler to decide whether a remote copy is newer than
-/// what this device last applied, before deciding to import it.
-pub(crate) fn peek_exported_at(app: &AppHandle, path: &str, password: &str) -> Result<String> {
-    Ok(read_backup_payload(app, path, password)?.exported_at)
 }
 
 /// Encrypts the user's sync password at rest, keyed by the master password —
@@ -627,6 +936,7 @@ mod tests {
             exported_at: "2026-07-07T10:00:00+05:30".to_string(),
             tables,
             settings,
+            tombstones: Vec::new(),
         }
     }
 
@@ -777,18 +1087,22 @@ mod tests {
     }
 
     /// Full sync round-trip between two real DBs: device A exports, device B
-    /// imports — B's pre-existing data is replaced, not merged.
+    /// imports — B's own unrelated data survives (union, not replace), and A's
+    /// account gets a *new* local id on B (since B already had an account with
+    /// the same integer id) with `equity_holdings.account_id` correctly
+    /// remapped to point at it rather than at B's unrelated row.
     #[test]
-    fn payload_roundtrip_replaces_target_db_contents() {
+    fn payload_roundtrip_merges_by_sync_id_with_fk_remap() {
         let (_dir_a, db_a) = test_db_pool();
         let (_dir_b, db_b) = test_db_pool();
         seed_source_db(&db_a);
 
-        // Device B has its own stale data that must be replaced
+        // Device B has its own unrelated account, which also gets local id 1 —
+        // the exact id collision that broke wholesale-replace merges.
         {
             let conn = db_b.get().unwrap();
             conn.execute(
-                "INSERT INTO accounts (name, type) VALUES ('Stale Account', 'manual')",
+                "INSERT INTO accounts (name, type) VALUES ('B''s Own Account', 'manual')",
                 [],
             )
             .unwrap();
@@ -803,8 +1117,72 @@ mod tests {
         let restored = decrypt_backup_bytes(&bytes, SYNC_PW).unwrap();
         let summary = apply_backup_payload(&db_b, &restored).unwrap();
 
-        assert_eq!(summary.rows_imported, total_rows, "every exported row must be imported");
-        assert!(summary.tables_imported >= 2, "at least accounts + equity_holdings");
+        // total_rows includes the 9 default milestone rows, which already exist
+        // on B (seeded identically, unique on `amount`) under a different
+        // sync_id — those are correctly skipped as duplicates-by-content, not
+        // inserted again. Only the account + equity holding are genuinely new.
+        assert_eq!(summary.rows_imported, total_rows - 9, "account + equity holding must be inserted as new");
+
+        let conn = db_b.get().unwrap();
+        let mut names: Vec<String> = conn
+            .prepare("SELECT name FROM accounts ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["B's Own Account".to_string(), "Source Bank".to_string()],
+            "both devices' accounts must survive — union, not replace"
+        );
+
+        // The imported equity holding's account_id must point at whichever local
+        // id "Source Bank" actually landed on for B, not at B's own account.
+        let source_bank_id: i64 = conn
+            .query_row("SELECT id FROM accounts WHERE name = 'Source Bank'", [], |r| r.get(0))
+            .unwrap();
+        let (symbol, qty, account_id): (String, f64, i64) = conn
+            .query_row(
+                "SELECT symbol, quantity, account_id FROM equity_holdings",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(symbol, "RELIANCE");
+        assert_eq!(qty, 10.0);
+        assert_eq!(account_id, source_bank_id, "FK must be remapped to B's local id for the row");
+
+        let theme: String = conn
+            .query_row("SELECT value FROM app_settings WHERE key='theme'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(theme, "dark");
+    }
+
+    /// A v1 (pre-merge-support) payload must still go through the old
+    /// wholesale-replace path — it has no `sync_id`s to merge by.
+    #[test]
+    fn v1_payload_still_replaces_wholesale() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+        {
+            let conn = db_b.get().unwrap();
+            conn.execute(
+                "INSERT INTO accounts (name, type) VALUES ('Stale Account', 'manual')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut payload = {
+            let conn = db_a.get().unwrap();
+            build_backup_payload(&conn).unwrap().0
+        };
+        payload.version = 1;
+
+        apply_backup_payload(&db_b, &payload).unwrap();
 
         let conn = db_b.get().unwrap();
         let names: Vec<String> = conn
@@ -814,22 +1192,73 @@ mod tests {
             .unwrap()
             .collect::<std::result::Result<_, _>>()
             .unwrap();
-        assert_eq!(names, vec!["Source Bank"], "stale account replaced, not merged");
+        assert_eq!(names, vec!["Source Bank"], "v1 payload replaces wholesale, not merges");
+    }
 
-        let (symbol, qty): (String, f64) = conn
-            .query_row(
-                "SELECT symbol, quantity FROM equity_holdings",
+    /// A row deleted on device A (after both devices have already synced once)
+    /// must be deleted on device B too on the next sync, not resurrected by the
+    /// union — this is the tombstone mechanism.
+    #[test]
+    fn delete_on_one_device_propagates_via_tombstone() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+
+        // First sync: A -> B, so B has a copy of the account.
+        let payload_1 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(&db_b, &payload_1).unwrap();
+        {
+            let conn = db_b.get().unwrap();
+            let count: i64 =
+                conn.query_row("SELECT count(*) FROM accounts WHERE name = 'Source Bank'", [], |r| r.get(0)).unwrap();
+            assert_eq!(count, 1, "precondition: B has the account after first sync");
+        }
+
+        // A deletes its account (cascades to equity_holdings), then re-exports.
+        db_a.get().unwrap().execute("DELETE FROM accounts WHERE name = 'Source Bank'", []).unwrap();
+        let payload_2 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        assert!(!payload_2.tombstones.is_empty(), "delete must produce a tombstone");
+
+        apply_backup_payload(&db_b, &payload_2).unwrap();
+
+        let conn = db_b.get().unwrap();
+        let count: i64 =
+            conn.query_row("SELECT count(*) FROM accounts WHERE name = 'Source Bank'", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 0, "delete must propagate, not be resurrected by the union");
+    }
+
+    /// When both devices edited the same row (same `sync_id`) independently,
+    /// the one with the newer `sync_updated_at` must win.
+    #[test]
+    fn both_sides_edited_newer_sync_updated_at_wins() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+
+        // First sync so both devices share the same sync_id for the account.
+        let payload_1 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(&db_b, &payload_1).unwrap();
+
+        // B edits the account name — bumps B's local sync_updated_at.
+        db_b.get().unwrap().execute("UPDATE accounts SET name = 'B Edited' WHERE name = 'Source Bank'", []).unwrap();
+
+        // A edits it too, but "later" — force sync_updated_at strictly ahead of B's.
+        {
+            let conn = db_a.get().unwrap();
+            conn.execute("UPDATE accounts SET name = 'A Edited' WHERE name = 'Source Bank'", []).unwrap();
+            conn.execute(
+                "UPDATE accounts SET sync_updated_at = datetime('now', '+1 hour') WHERE name = 'A Edited'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(symbol, "RELIANCE");
-        assert_eq!(qty, 10.0);
+        }
 
-        let theme: String = conn
-            .query_row("SELECT value FROM app_settings WHERE key='theme'", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(theme, "dark");
+        let payload_2 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(&db_b, &payload_2).unwrap();
+
+        let name: String =
+            db_b.get().unwrap().query_row("SELECT name FROM accounts", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "A Edited", "the strictly-newer edit must win");
     }
 
     #[test]

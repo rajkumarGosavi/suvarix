@@ -1,8 +1,14 @@
-.PHONY: setup dev dev-ui build release release-gami test test-unit test-frontend test-all lint clean
+.PHONY: setup dev dev-ui build release release-gami test test-unit test-frontend test-all lint clean status
 
 # Windows-only: Git's bundled perl (cygwin-style paths) breaks openssl-sys build script.
 # Set only here (not repo .cargo/config.toml) so it never leaks into mac/linux CI runners.
 OPENSSL_SRC_PERL := C:/Strawberry/perl/bin/perl.exe
+
+# make's default shell is cmd.exe on Windows, which doesn't understand `VAR=val cmd`
+# recipe syntax — force Git Bash so the OPENSSL_SRC_PERL= prefix below actually works.
+ifeq ($(OS),Windows_NT)
+SHELL := C:/Program Files/Git/bin/bash.exe
+endif
 
 # Install frontend deps
 setup:
@@ -55,3 +61,7 @@ lint:
 clean:
 	cargo clean --manifest-path src-tauri/Cargo.toml
 	node -e "['dist','coverage','src-tauri/gen'].forEach(d=>require('fs').rmSync(d,{recursive:true,force:true}))"
+
+# Check for leftover dev processes (Vite port 1420, suvarix.exe) that block clean/dev
+status:
+	powershell -NoProfile -File scripts/status.ps1

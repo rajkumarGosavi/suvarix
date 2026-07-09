@@ -38,7 +38,122 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(MIGRATION_016);
     // MIGRATION_017: reminder-scheduler dedup state — INSERT OR IGNORE is idempotent
     conn.execute_batch(MIGRATION_017).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_018 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
+    let _ = conn.execute_batch(&migration_018_add_sync_columns());
+    // MIGRATION_019: sync_tombstones table + backfill + triggers — CREATE ... IF NOT EXISTS
+    // and UPDATE ... WHERE col IS NULL throughout, safe to re-run.
+    conn.execute_batch(&migration_019_sync_infra()).map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
+}
+
+/// Tables that participate in cross-device sync (see `backup::commands`). Single
+/// source of truth for both the sync-column migration below and the merge logic
+/// in `backup::commands`, which re-exports this list rather than duplicating it.
+pub(crate) const SYNC_TABLES: &[&str] = &[
+    "accounts",
+    "equity_holdings",
+    "mf_holdings",
+    "sip_schedules",
+    "fd_holdings",
+    "ppf_epf_holdings",
+    "real_estate_holdings",
+    "gold_holdings",
+    "crypto_holdings",
+    "insurance_holdings",
+    "bond_holdings",
+    "loans",
+    "credit_cards",
+    "transactions",
+    "budgets",
+    "net_worth_snapshots",
+    "import_log",
+    "goals",
+    "bills",
+    "recurring_transactions",
+    "milestones",
+];
+
+/// Adds the two bookkeeping columns every synced table needs for merge (as opposed
+/// to wholesale-replace) sync: `sync_id` is a globally-unique row identity that
+/// survives across devices (unlike the local `INTEGER PRIMARY KEY`, which two
+/// devices can assign to unrelated rows); `sync_updated_at` is a merge-only
+/// last-write-wins clock maintained purely by triggers (see `migration_019_sync_infra`),
+/// independent of whichever app-level `updated_at` column a table may or may not have.
+fn migration_018_add_sync_columns() -> String {
+    let mut sql = String::new();
+    for table in SYNC_TABLES {
+        sql.push_str(&format!("ALTER TABLE {table} ADD COLUMN sync_id TEXT;\n"));
+        sql.push_str(&format!("ALTER TABLE {table} ADD COLUMN sync_updated_at TEXT;\n"));
+    }
+    sql
+}
+
+/// Best-effort existing timestamp to seed `sync_updated_at` from at backfill time,
+/// per table (tables vary in which of `updated_at`/`created_at`/neither they have).
+fn sync_backfill_source_expr(table: &str) -> &'static str {
+    match table {
+        "sip_schedules" | "budgets" | "net_worth_snapshots" => "datetime('now')",
+        "fd_holdings" | "real_estate_holdings" | "gold_holdings" | "crypto_holdings"
+        | "insurance_holdings" | "milestones" => "COALESCE(created_at, datetime('now'))",
+        "import_log" => "COALESCE(imported_at, datetime('now'))",
+        _ => "COALESCE(updated_at, datetime('now'))",
+    }
+}
+
+/// `sync_tombstones` records a `(table, sync_id, deleted_at)` for every row ever
+/// deleted from a synced table, so a delete on one device can be told apart from
+/// "this device just never had that row" when merging with another device's
+/// export — without this, a merge-by-union would resurrect deleted rows forever.
+/// Populated automatically by the `trg_<table>_tombstone` trigger below, so
+/// deletes — including ON DELETE CASCADE — need no app-code changes to be tracked.
+/// Tombstones are kept indefinitely (no retention purge): correctness over file size
+/// at this app's personal single/dual-device scale.
+///
+/// `sync_updated_at` is bumped by `trg_<table>_sync_update` only when the app's own
+/// UPDATE didn't already set it — which lets the merge/import path set an explicit
+/// `sync_updated_at` (copied from the remote row) without the trigger clobbering it.
+/// Same COALESCE trick on insert lets import preserve a remote row's original
+/// `sync_id`/`sync_updated_at` instead of minting fresh ones.
+fn migration_019_sync_infra() -> String {
+    let mut sql = String::from(
+        "
+CREATE TABLE IF NOT EXISTS sync_tombstones (
+    table_name TEXT NOT NULL,
+    sync_id    TEXT NOT NULL,
+    deleted_at TEXT NOT NULL,
+    PRIMARY KEY (table_name, sync_id)
+);
+",
+    );
+    for table in SYNC_TABLES {
+        let expr = sync_backfill_source_expr(table);
+        sql.push_str(&format!(
+            "UPDATE {table} SET sync_id = lower(hex(randomblob(16))) WHERE sync_id IS NULL;\n"
+        ));
+        sql.push_str(&format!(
+            "UPDATE {table} SET sync_updated_at = {expr} WHERE sync_updated_at IS NULL;\n"
+        ));
+        sql.push_str(&format!(
+            "CREATE TRIGGER IF NOT EXISTS trg_{table}_sync_insert AFTER INSERT ON {table} BEGIN \
+             UPDATE {table} SET sync_id = COALESCE(NEW.sync_id, lower(hex(randomblob(16)))), \
+             sync_updated_at = COALESCE(NEW.sync_updated_at, datetime('now')) WHERE rowid = NEW.rowid; \
+             END;\n"
+        ));
+        sql.push_str(&format!(
+            "CREATE TRIGGER IF NOT EXISTS trg_{table}_sync_update AFTER UPDATE ON {table} \
+             WHEN NEW.sync_updated_at IS OLD.sync_updated_at BEGIN \
+             UPDATE {table} SET sync_updated_at = datetime('now') WHERE rowid = NEW.rowid; \
+             END;\n"
+        ));
+        sql.push_str(&format!(
+            "CREATE TRIGGER IF NOT EXISTS trg_{table}_tombstone AFTER DELETE ON {table} BEGIN \
+             INSERT INTO sync_tombstones (table_name, sync_id, deleted_at) \
+             VALUES ('{table}', OLD.sync_id, datetime('now')) \
+             ON CONFLICT(table_name, sync_id) DO UPDATE SET deleted_at = excluded.deleted_at; \
+             END;\n"
+        ));
+    }
+    sql
 }
 
 #[cfg(test)]

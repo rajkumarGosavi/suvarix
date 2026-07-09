@@ -2,6 +2,10 @@
 
 # Suvarix — Personal Finance Tracker
 
+[![Build](https://github.com/rajkumarGosavi/suvarix/actions/workflows/build.yml/badge.svg)](https://github.com/rajkumarGosavi/suvarix/actions/workflows/build.yml)
+![Version](https://img.shields.io/github/package-json/v/rajkumarGosavi/suvarix)
+![License](https://img.shields.io/badge/license-proprietary-lightgrey)
+
 A privacy-first, offline-first desktop app for Indian investors. Track all your assets, liabilities, income, and expenses in one place — everything stays on your device.
 
 ---
