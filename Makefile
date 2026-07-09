@@ -47,7 +47,7 @@ test-all: test test-frontend
 lint:
 	cargo clippy --manifest-path src-tauri/Cargo.toml
 
-# Clean Rust + frontend build artifacts
+# Clean Rust + frontend + generated mobile project build artifacts
 clean:
 	cargo clean --manifest-path src-tauri/Cargo.toml
-	pnpm exec rimraf dist
+	node -e "['dist','coverage','src-tauri/gen'].forEach(d=>require('fs').rmSync(d,{recursive:true,force:true}))"
