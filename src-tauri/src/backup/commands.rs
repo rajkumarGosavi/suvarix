@@ -11,6 +11,8 @@ use sha2::Sha256;
 use std::io::Write as _;
 use tauri::{AppHandle, State};
 use tauri_plugin_fs::{FsExt, OpenOptions};
+#[cfg(target_os = "android")]
+use tauri_plugin_android_fs::{AndroidFsExt, Entry, FsUri};
 
 use crate::constants::APP_NAME;
 use crate::db::{DbPool, DbState};
@@ -23,6 +25,10 @@ const FORMAT_VERSION: u8 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN; // 33
+
+/// Filename the auto-sync scheduler writes/reads inside the user's chosen
+/// sync folder (desktop) or SAF tree (Android). Shared with `backup::scheduler`.
+pub(crate) const SYNC_FILENAME: &str = "suvarix-sync.svbak";
 
 // ── Sync scope ────────────────────────────────────────────────
 
@@ -279,6 +285,121 @@ pub fn has_sync_password(state: State<DbState>) -> Result<bool> {
 #[tauri::command]
 pub fn sync_now(app: AppHandle, state: State<DbState>) -> Result<crate::backup::scheduler::SyncOutcome> {
     crate::backup::scheduler::run_tick(&app, &state.0)
+}
+
+// ── Android auto-sync folder (SAF) ───────────────────────────────
+// tauri-plugin-dialog has no directory picker on Android (desktop-only), so
+// auto-sync's folder picker uses tauri-plugin-android-fs there instead. That
+// plugin also persists the SAF grant across app restarts — required because
+// the background scheduler ticks even after Android kills and relaunches the
+// process, long after the picker dialog is gone. The folder is stored in the
+// `sync_folder_path` setting as `FsUri::to_json_string()`, not a plain path.
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub fn pick_sync_folder_android(app: AppHandle) -> Result<Option<String>> {
+    let api = app.android_fs();
+    let dir = api
+        .picker()
+        .pick_dir(None, false)
+        .map_err(|e| AppError::Database(format!("pick sync folder: {e}")))?;
+    let Some(dir) = dir else { return Ok(None) };
+    api.picker()
+        .persist_uri_permission(&dir)
+        .map_err(|e| AppError::Database(format!("persist sync folder permission: {e}")))?;
+    let json = dir
+        .to_json_string()
+        .map_err(|e| AppError::Database(format!("serialize sync folder: {e}")))?;
+    Ok(Some(json))
+}
+
+/// Finds `SYNC_FILENAME` inside the picked folder, creating it if this is
+/// the first sync from this device.
+#[cfg(target_os = "android")]
+fn android_resolve_sync_file(app: &AppHandle, dir_json: &str) -> Result<FsUri> {
+    let dir = FsUri::from_json_str(dir_json)
+        .map_err(|e| AppError::Database(format!("bad sync folder: {e}")))?;
+    let api = app.android_fs();
+    let existing = api
+        .read_dir(&dir)
+        .map_err(|e| AppError::Database(format!("list sync folder: {e}")))?
+        .into_iter()
+        .find_map(|entry| match entry {
+            Entry::File { uri, name, .. } if name == SYNC_FILENAME => Some(uri),
+            _ => None,
+        });
+    if let Some(uri) = existing {
+        return Ok(uri);
+    }
+    api.create_new_file(&dir, SYNC_FILENAME, Some("application/octet-stream"))
+        .map_err(|e| AppError::Database(format!("create sync file: {e}")))
+}
+
+/// Android counterpart to `export_sync_backup_impl` — same payload build +
+/// encrypt, but writes via the SAF-aware `android_fs` API instead of
+/// `tauri_plugin_fs`, since the folder is a persisted content:// tree URI.
+#[cfg(target_os = "android")]
+pub(crate) fn android_export_sync_backup(
+    app: &AppHandle,
+    dir_json: &str,
+    password: &str,
+    db: &DbPool,
+) -> Result<ExportSummary> {
+    let (payload, total_rows) = {
+        let conn = db.get()?;
+        build_backup_payload(&conn)?
+    };
+    let exported_at = payload.exported_at.clone();
+    let bytes = encrypt_backup_bytes(&payload, password)?;
+    let file_uri = android_resolve_sync_file(app, dir_json)?;
+    app.android_fs()
+        .write(&file_uri, &bytes)
+        .map_err(|e| AppError::Database(format!("write sync file: {e}")))?;
+    Ok(ExportSummary { rows_exported: total_rows, exported_at })
+}
+
+/// Android counterpart to `peek_exported_at`. Returns `None` when no remote
+/// file exists yet (first sync from this device), matching desktop's
+/// `Path::exists()` check in the scheduler.
+#[cfg(target_os = "android")]
+pub(crate) fn android_peek_exported_at(
+    app: &AppHandle,
+    dir_json: &str,
+    password: &str,
+) -> Result<Option<String>> {
+    let dir = FsUri::from_json_str(dir_json)
+        .map_err(|e| AppError::Database(format!("bad sync folder: {e}")))?;
+    let api = app.android_fs();
+    let existing = api
+        .read_dir(&dir)
+        .map_err(|e| AppError::Database(format!("list sync folder: {e}")))?
+        .into_iter()
+        .find_map(|entry| match entry {
+            Entry::File { uri, name, .. } if name == SYNC_FILENAME => Some(uri),
+            _ => None,
+        });
+    let Some(file_uri) = existing else { return Ok(None) };
+    let bytes = api
+        .read(&file_uri)
+        .map_err(|e| AppError::Database(format!("read sync file: {e}")))?;
+    Ok(Some(decrypt_backup_bytes(&bytes, password)?.exported_at))
+}
+
+/// Android counterpart to `import_sync_backup_impl`.
+#[cfg(target_os = "android")]
+pub(crate) fn android_import_sync_backup(
+    app: &AppHandle,
+    dir_json: &str,
+    password: &str,
+    db: &DbPool,
+) -> Result<ImportSummary> {
+    let file_uri = android_resolve_sync_file(app, dir_json)?;
+    let bytes = app
+        .android_fs()
+        .read(&file_uri)
+        .map_err(|e| AppError::Database(format!("read sync file: {e}")))?;
+    let payload = decrypt_backup_bytes(&bytes, password)?;
+    apply_backup_payload(db, &payload)
 }
 
 // ── File I/O ──────────────────────────────────────────────────

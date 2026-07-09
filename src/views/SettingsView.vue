@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { save, open } from "@tauri-apps/plugin-dialog";
@@ -14,6 +14,11 @@ import { useRemindersStore } from "@/stores/reminders";
 import { APP_NAME } from "@/constants";
 import { useAnalytics } from "@/composables/useAnalytics";
 import { friendlyError } from "@/utils/errorMessage";
+
+// Zerodha/Upstox OAuth uses this same check elsewhere (DataSourcesView) —
+// tauri-plugin-dialog has no directory picker on Android, so auto-sync's
+// folder picker goes through a native command there instead (see below).
+const isAndroid = /android/i.test(navigator.userAgent);
 
 // ─── Analytics types ─────────────────────────────────────────
 interface EventStat   { eventName: string; count: number; lastSeen: string; }
@@ -326,8 +331,20 @@ async function loadAutoSyncSettings() {
     try { autoSyncHasPassword.value = await invoke<boolean>("has_sync_password"); } catch { /* non-critical */ }
 }
 
+// Android stores a JSON-encoded SAF tree URI here, not a human path — show
+// a friendly label instead of the raw JSON blob.
+const autoSyncFolderDisplay = computed(() => {
+    if (!autoSyncFolder.value) return "Not set";
+    return isAndroid ? "Folder selected" : autoSyncFolder.value;
+});
+
 async function chooseAutoSyncFolder() {
-    const dir = await open({ directory: true });
+    // plugin-dialog's directory picker is desktop-only; Android goes through
+    // a native SAF picker command that also persists the grant across app
+    // restarts (needed for the background scheduler to keep working).
+    const dir = isAndroid
+        ? await invoke<string | null>("pick_sync_folder_android")
+        : await open({ directory: true });
     if (!dir) return;
     autoSyncFolder.value = dir as string;
     await invoke("set_setting", { key: "sync_folder_path", value: autoSyncFolder.value });
@@ -379,6 +396,10 @@ async function syncNow() {
     autoSyncNowLoading.value = true;
     try {
         const r = await invoke<{ ran: boolean; imported: boolean; exportedAt: string | null }>("sync_now");
+        if (!r.ran) {
+            toast.add({ severity: "warn", summary: "Sync skipped", detail: "Turn on Auto Sync above, then try again.", life: 4000 });
+            return;
+        }
         if (r.exportedAt) lastSyncAt.value = r.exportedAt;
         toast.add({
             severity: "success",
@@ -633,7 +654,7 @@ getVersion().then(v => appVersion.value = v);
                 <div class="auto-sync-row">
                     <span class="auto-sync-label">Sync folder</span>
                     <div class="auto-sync-control">
-                        <span class="auto-sync-path">{{ autoSyncFolder || "Not set" }}</span>
+                        <span class="auto-sync-path">{{ autoSyncFolderDisplay }}</span>
                         <Button label="Choose…" size="small" outlined @click="chooseAutoSyncFolder" />
                     </div>
                 </div>

@@ -49,6 +49,11 @@ pub fn run() {
         Some(vec!["--hidden"]),
     ));
 
+    // tauri-plugin-dialog has no directory picker on Android — auto-sync's
+    // folder picker uses this plugin there instead (see backup::commands).
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_android_fs::init());
+
     builder
         .setup(|app| {
             let app_data_dir = app
@@ -227,6 +232,8 @@ pub fn run() {
             backup::commands::set_sync_password,
             backup::commands::has_sync_password,
             backup::commands::sync_now,
+            #[cfg(target_os = "android")]
+            backup::commands::pick_sync_folder_android,
             settings::commands::wipe_all_data,
             settings::commands::get_app_data_dir,
             settings::commands::write_csv,

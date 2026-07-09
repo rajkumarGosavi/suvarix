@@ -5,19 +5,23 @@
 // loop just decides when to read/write it. Started on unlock, stopped on
 // lock/quit — same lifecycle as `notifications::scheduler::SchedulerState`.
 
+#[cfg(not(target_os = "android"))]
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
+use crate::backup::commands::decrypt_sync_password;
+#[cfg(not(target_os = "android"))]
 use crate::backup::commands::{
-    decrypt_sync_password, export_sync_backup_impl, import_sync_backup_impl, peek_exported_at,
+    export_sync_backup_impl, import_sync_backup_impl, peek_exported_at, SYNC_FILENAME,
 };
+#[cfg(target_os = "android")]
+use crate::backup::commands::{android_export_sync_backup, android_import_sync_backup, android_peek_exported_at};
 use crate::db::DbPool;
 use crate::error::Result;
 
-const SYNC_FILENAME: &str = "suvarix-sync.svbak";
 const SETTING_ENABLED: &str = "auto_sync_enabled";
 const SETTING_FOLDER: &str = "sync_folder_path";
 const SETTING_INTERVAL_MIN: &str = "auto_sync_interval_minutes";
@@ -134,23 +138,46 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
 
     let master_password = db.current_password()?;
     let sync_password = decrypt_sync_password(&password_enc, &master_password)?;
-    let file_path = Path::new(&folder).join(SYNC_FILENAME).to_string_lossy().into_owned();
 
-    let mut imported = false;
-    if Path::new(&file_path).exists() {
-        if let Ok(remote_exported_at) = peek_exported_at(app, &file_path, &sync_password) {
+    // On Android, `folder` is a persisted SAF tree URI (JSON-encoded FsUri),
+    // not a real filesystem path — std::path::Path can't join/exists() it.
+    #[cfg(target_os = "android")]
+    {
+        let mut imported = false;
+        if let Some(remote_exported_at) = android_peek_exported_at(app, &folder, &sync_password)? {
             if is_remote_newer(&remote_exported_at, &last_applied) {
-                import_sync_backup_impl(app, &file_path, &sync_password, db)?;
+                android_import_sync_backup(app, &folder, &sync_password, db)?;
                 set_setting(db, SETTING_LAST_EXPORTED_AT, &remote_exported_at)?;
                 imported = true;
             }
         }
+
+        let summary = android_export_sync_backup(app, &folder, &sync_password, db)?;
+        set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
+
+        return Ok(SyncOutcome { ran: true, imported, exported_at: Some(summary.exported_at) });
     }
 
-    let summary = export_sync_backup_impl(app, &file_path, &sync_password, db)?;
-    set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
+    #[cfg(not(target_os = "android"))]
+    {
+        let file_path = Path::new(&folder).join(SYNC_FILENAME).to_string_lossy().into_owned();
 
-    Ok(SyncOutcome { ran: true, imported, exported_at: Some(summary.exported_at) })
+        let mut imported = false;
+        if Path::new(&file_path).exists() {
+            if let Ok(remote_exported_at) = peek_exported_at(app, &file_path, &sync_password) {
+                if is_remote_newer(&remote_exported_at, &last_applied) {
+                    import_sync_backup_impl(app, &file_path, &sync_password, db)?;
+                    set_setting(db, SETTING_LAST_EXPORTED_AT, &remote_exported_at)?;
+                    imported = true;
+                }
+            }
+        }
+
+        let summary = export_sync_backup_impl(app, &file_path, &sync_password, db)?;
+        set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
+
+        Ok(SyncOutcome { ran: true, imported, exported_at: Some(summary.exported_at) })
+    }
 }
 
 /// Last-write-wins staleness check: import only if the remote snapshot's
