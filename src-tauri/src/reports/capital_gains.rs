@@ -194,3 +194,151 @@ pub fn calculate(conn: &Connection, fy: &str, method: &str) -> Result<CapitalGai
 
     Ok(CapitalGainsReport { stcg: stcg_total, ltcg: ltcg_total, transactions: gain_txns })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::test_db_pool;
+
+    fn insert_txn(
+        conn: &Connection,
+        date: &str,
+        tx_type: &str,
+        asset_class: &str,
+        holding_id: Option<i64>,
+        quantity: f64,
+        price: f64,
+        description: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO transactions (date, type, asset_class, holding_id, amount, quantity, price, description)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            rusqlite::params![date, tx_type, asset_class, holding_id, quantity * price, quantity, price, description],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn invalid_fy_string_returns_empty_report() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        let report = calculate(&conn, "garbage", "FIFO").unwrap();
+        assert_eq!(report.stcg, 0.0);
+        assert_eq!(report.ltcg, 0.0);
+        assert!(report.transactions.is_empty());
+    }
+
+    #[test]
+    fn ltcg_when_held_365_days_or_more_stcg_below() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        // Held exactly 365 days → LTCG (boundary: is_stcg = days < 365)
+        insert_txn(&conn, "2023-06-02", "buy", "equity", Some(1), 10.0, 100.0, "INFY");
+        insert_txn(&conn, "2024-06-01", "sell", "equity", Some(1), 10.0, 150.0, "INFY");
+        // Held 100 days → STCG
+        insert_txn(&conn, "2024-04-01", "buy", "equity", Some(2), 5.0, 200.0, "TCS");
+        insert_txn(&conn, "2024-07-10", "sell", "equity", Some(2), 5.0, 260.0, "TCS");
+
+        let report = calculate(&conn, "2024-25", "FIFO").unwrap();
+        assert_eq!(report.ltcg, (150.0 - 100.0) * 10.0);
+        assert_eq!(report.stcg, (260.0 - 200.0) * 5.0);
+
+        let ltcg = report.transactions.iter().find(|t| t.symbol == "INFY").unwrap();
+        assert_eq!(ltcg.gain_type, "LTCG");
+        assert_eq!(ltcg.holding_days, 365);
+        let stcg = report.transactions.iter().find(|t| t.symbol == "TCS").unwrap();
+        assert_eq!(stcg.gain_type, "STCG");
+        assert_eq!(stcg.holding_days, 100);
+    }
+
+    #[test]
+    fn fifo_consumes_oldest_lot_first_across_partial_lots() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        insert_txn(&conn, "2024-04-01", "buy", "equity", Some(1), 5.0, 100.0, "INFY");
+        insert_txn(&conn, "2024-05-01", "buy", "equity", Some(1), 5.0, 200.0, "INFY");
+        insert_txn(&conn, "2024-06-01", "sell", "equity", Some(1), 8.0, 300.0, "INFY");
+
+        let report = calculate(&conn, "2024-25", "FIFO").unwrap();
+        // 5 @ 100 fully consumed, then 3 @ 200
+        assert_eq!(report.stcg, (300.0 - 100.0) * 5.0 + (300.0 - 200.0) * 3.0);
+        assert_eq!(report.transactions.len(), 2);
+        assert_eq!(report.transactions[0].buy_price, 100.0);
+        assert_eq!(report.transactions[0].quantity, 5.0);
+        assert_eq!(report.transactions[1].buy_price, 200.0);
+        assert_eq!(report.transactions[1].quantity, 3.0);
+    }
+
+    #[test]
+    fn lifo_consumes_newest_lot_first() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        insert_txn(&conn, "2024-04-01", "buy", "equity", Some(1), 5.0, 100.0, "INFY");
+        insert_txn(&conn, "2024-05-01", "buy", "equity", Some(1), 5.0, 200.0, "INFY");
+        insert_txn(&conn, "2024-06-01", "sell", "equity", Some(1), 5.0, 300.0, "INFY");
+
+        let report = calculate(&conn, "2024-25", "LIFO").unwrap();
+        assert_eq!(report.stcg, (300.0 - 200.0) * 5.0);
+        assert_eq!(report.transactions[0].buy_price, 200.0);
+    }
+
+    #[test]
+    fn sells_outside_financial_year_excluded() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        insert_txn(&conn, "2023-01-01", "buy", "equity", Some(1), 10.0, 100.0, "INFY");
+        // Sell in FY 2023-24, not 2024-25
+        insert_txn(&conn, "2024-03-15", "sell", "equity", Some(1), 10.0, 150.0, "INFY");
+
+        let report = calculate(&conn, "2024-25", "FIFO").unwrap();
+        assert!(report.transactions.is_empty());
+
+        let report = calculate(&conn, "2023-24", "FIFO").unwrap();
+        assert_eq!(report.transactions.len(), 1);
+    }
+
+    #[test]
+    fn same_day_datetime_sell_on_fy_end_included() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        insert_txn(&conn, "2024-04-01", "buy", "equity", Some(1), 10.0, 100.0, "INFY");
+        // Datetime on last day of FY — end-of-day widening must include it
+        insert_txn(&conn, "2025-03-31 14:30:00", "sell", "equity", Some(1), 10.0, 150.0, "INFY");
+
+        let report = calculate(&conn, "2024-25", "FIFO").unwrap();
+        assert_eq!(report.transactions.len(), 1);
+    }
+
+    #[test]
+    fn sell_without_matching_buy_lot_is_skipped() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        insert_txn(&conn, "2024-06-01", "sell", "equity", Some(99), 10.0, 150.0, "GHOST");
+
+        let report = calculate(&conn, "2024-25", "FIFO").unwrap();
+        assert!(report.transactions.is_empty());
+        assert_eq!(report.stcg, 0.0);
+    }
+
+    #[test]
+    fn lots_matched_by_description_when_holding_id_missing() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        insert_txn(&conn, "2024-04-01", "buy", "mf", None, 100.0, 10.0, "UTI Nifty 50");
+        insert_txn(&conn, "2024-04-01", "buy", "mf", None, 100.0, 50.0, "Other Fund");
+        insert_txn(&conn, "2024-08-01", "sell", "mf", None, 100.0, 12.0, "UTI Nifty 50");
+
+        let report = calculate(&conn, "2024-25", "FIFO").unwrap();
+        assert_eq!(report.transactions.len(), 1);
+        assert_eq!(report.transactions[0].symbol, "UTI Nifty 50");
+        assert!((report.stcg - (12.0 - 10.0) * 100.0).abs() < 1e-9);
+    }
+}

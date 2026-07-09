@@ -12,5 +12,14 @@ export default defineConfig({
     environment: "happy-dom",
     globals: true,
     include: ["src/**/*.test.ts"],
+    coverage: {
+      provider: "v8",
+      reportsDirectory: "coverage",
+      reporter: ["text", "html", "json-summary"],
+      // Only code that has a test harness today — stores + composables.
+      // Widen when component/view tests land.
+      include: ["src/stores/**/*.ts", "src/composables/**/*.ts"],
+      exclude: ["src/**/__tests__/**"],
+    },
   },
 });

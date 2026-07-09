@@ -1,3 +1,4 @@
+use rusqlite::Connection;
 use tauri::State;
 use serde::{Deserialize, Serialize};
 use crate::db::DbState;
@@ -28,15 +29,7 @@ pub struct SetBudgetPayload {
     pub monthly_limit: f64,
 }
 
-#[tauri::command]
-pub fn get_category_summary(
-    period: String,
-    custom_start: Option<String>,
-    custom_end: Option<String>,
-    state: State<DbState>,
-) -> Result<Vec<CategorySummary>> {
-    let conn = state.0.get()?;
-    let (start, end) = period_bounds(&period, custom_start, custom_end);
+fn category_summary_impl(conn: &Connection, start: &str, end: &str) -> Result<Vec<CategorySummary>> {
     let mut stmt = conn.prepare(
         "SELECT category, type, SUM(amount) as total, COUNT(*) as cnt
          FROM transactions
@@ -44,16 +37,13 @@ pub fn get_category_summary(
            AND category IS NOT NULL
          GROUP BY category, type ORDER BY total DESC"
     )?;
-    let rows = stmt.query_map([&start, &end], |r| Ok(CategorySummary {
+    let rows = stmt.query_map([start, end], |r| Ok(CategorySummary {
         category: r.get(0)?, tx_type: r.get(1)?, total: r.get(2)?, count: r.get(3)?,
     }))?;
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-#[tauri::command]
-pub fn get_budget_status(state: State<DbState>) -> Result<Vec<BudgetStatus>> {
-    let conn = state.0.get()?;
-    let (start, end) = current_month_bounds();
+fn budget_status_impl(conn: &Connection, start: &str, end: &str) -> Result<Vec<BudgetStatus>> {
     let mut stmt = conn.prepare(
         "SELECT b.category, b.monthly_limit,
                 COALESCE(SUM(t.amount), 0.0) AS spent
@@ -66,7 +56,7 @@ pub fn get_budget_status(state: State<DbState>) -> Result<Vec<BudgetStatus>> {
          WHERE b.is_active = 1
          GROUP BY b.id, b.category, b.monthly_limit",
     )?;
-    let rows = stmt.query_map(rusqlite::params![&start, &end], |r| {
+    let rows = stmt.query_map(rusqlite::params![start, end], |r| {
         let category: String = r.get(0)?;
         let monthly_limit: f64 = r.get(1)?;
         let spent: f64 = r.get(2)?;
@@ -82,9 +72,7 @@ pub fn get_budget_status(state: State<DbState>) -> Result<Vec<BudgetStatus>> {
     Ok(result)
 }
 
-#[tauri::command]
-pub fn set_budget(payload: SetBudgetPayload, state: State<DbState>) -> Result<()> {
-    let conn = state.0.get()?;
+fn set_budget_impl(conn: &Connection, payload: &SetBudgetPayload) -> Result<()> {
     conn.execute(
         "INSERT INTO budgets (category, monthly_limit) VALUES (?1, ?2)
          ON CONFLICT(category, period) DO UPDATE SET monthly_limit=excluded.monthly_limit",
@@ -93,16 +81,12 @@ pub fn set_budget(payload: SetBudgetPayload, state: State<DbState>) -> Result<()
     Ok(())
 }
 
-#[tauri::command]
-pub fn delete_budget(category: String, state: State<DbState>) -> Result<()> {
-    let conn = state.0.get()?;
+fn delete_budget_impl(conn: &Connection, category: &str) -> Result<()> {
     conn.execute("DELETE FROM budgets WHERE category = ?1", [category])?;
     Ok(())
 }
 
-#[tauri::command]
-pub fn get_monthly_trend(months: i64, state: State<DbState>) -> Result<Vec<MonthlyTrend>> {
-    let conn = state.0.get()?;
+fn monthly_trend_impl(conn: &Connection, months: i64) -> Result<Vec<MonthlyTrend>> {
     let mut stmt = conn.prepare(
         "SELECT strftime('%Y-%m', date) as month,
                 SUM(CASE WHEN type='income' THEN amount ELSE 0 END) as income,
@@ -115,6 +99,43 @@ pub fn get_monthly_trend(months: i64, state: State<DbState>) -> Result<Vec<Month
         month: r.get(0)?, income: r.get(1)?, expense: r.get(2)?,
     }))?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+pub fn get_category_summary(
+    period: String,
+    custom_start: Option<String>,
+    custom_end: Option<String>,
+    state: State<DbState>,
+) -> Result<Vec<CategorySummary>> {
+    let conn = state.0.get()?;
+    let (start, end) = period_bounds(&period, custom_start, custom_end);
+    category_summary_impl(&conn, &start, &end)
+}
+
+#[tauri::command]
+pub fn get_budget_status(state: State<DbState>) -> Result<Vec<BudgetStatus>> {
+    let conn = state.0.get()?;
+    let (start, end) = current_month_bounds();
+    budget_status_impl(&conn, &start, &end)
+}
+
+#[tauri::command]
+pub fn set_budget(payload: SetBudgetPayload, state: State<DbState>) -> Result<()> {
+    let conn = state.0.get()?;
+    set_budget_impl(&conn, &payload)
+}
+
+#[tauri::command]
+pub fn delete_budget(category: String, state: State<DbState>) -> Result<()> {
+    let conn = state.0.get()?;
+    delete_budget_impl(&conn, &category)
+}
+
+#[tauri::command]
+pub fn get_monthly_trend(months: i64, state: State<DbState>) -> Result<Vec<MonthlyTrend>> {
+    let conn = state.0.get()?;
+    monthly_trend_impl(&conn, months)
 }
 
 fn period_bounds(period: &str, custom_start: Option<String>, custom_end: Option<String>) -> (String, String) {
@@ -146,4 +167,129 @@ fn current_month_bounds() -> (String, String) {
     let start = format!("{}-{:02}-01", now.year(), now.month());
     let end = format!("{}-{:02}-31 23:59:59", now.year(), now.month());
     (start, end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::test_db_pool;
+
+    fn insert_txn(conn: &Connection, date: &str, tx_type: &str, amount: f64, category: &str) {
+        conn.execute(
+            "INSERT INTO transactions (date, type, amount, category) VALUES (?1,?2,?3,?4)",
+            rusqlite::params![date, tx_type, amount, category],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn category_summary_groups_by_category_and_type_within_window() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        insert_txn(&conn, "2026-06-05", "expense", 500.0, "Food");
+        insert_txn(&conn, "2026-06-20", "expense", 300.0, "Food");
+        insert_txn(&conn, "2026-06-10", "income", 50_000.0, "Salary");
+        insert_txn(&conn, "2026-05-01", "expense", 999.0, "Food"); // outside window
+        insert_txn(&conn, "2026-06-15", "buy", 1_000.0, "Food");   // wrong type
+
+        let summary = category_summary_impl(&conn, "2026-06-01", "2026-06-30 23:59:59").unwrap();
+        assert_eq!(summary.len(), 2);
+
+        let food = summary.iter().find(|s| s.category == "Food").unwrap();
+        assert_eq!(food.tx_type, "expense");
+        assert_eq!(food.total, 800.0);
+        assert_eq!(food.count, 2);
+
+        let salary = summary.iter().find(|s| s.category == "Salary").unwrap();
+        assert_eq!(salary.tx_type, "income");
+        assert_eq!(salary.total, 50_000.0);
+    }
+
+    #[test]
+    fn budget_status_computes_spent_remaining_and_percent() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        set_budget_impl(&conn, &SetBudgetPayload { category: "Food".into(), monthly_limit: 1_000.0 }).unwrap();
+        insert_txn(&conn, "2026-06-05", "expense", 250.0, "Food");
+
+        let status = budget_status_impl(&conn, "2026-06-01", "2026-06-30 23:59:59").unwrap();
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0].spent, 250.0);
+        assert_eq!(status[0].remaining, 750.0);
+        assert_eq!(status[0].percent_used, 25.0);
+    }
+
+    #[test]
+    fn budget_status_overspend_clamps_remaining_to_zero() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        set_budget_impl(&conn, &SetBudgetPayload { category: "Food".into(), monthly_limit: 1_000.0 }).unwrap();
+        insert_txn(&conn, "2026-06-05", "expense", 1_500.0, "Food");
+
+        let status = budget_status_impl(&conn, "2026-06-01", "2026-06-30 23:59:59").unwrap();
+        assert_eq!(status[0].remaining, 0.0);
+        assert_eq!(status[0].percent_used, 150.0);
+    }
+
+    #[test]
+    fn set_budget_upserts_existing_category_limit() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        set_budget_impl(&conn, &SetBudgetPayload { category: "Food".into(), monthly_limit: 1_000.0 }).unwrap();
+        set_budget_impl(&conn, &SetBudgetPayload { category: "Food".into(), monthly_limit: 2_000.0 }).unwrap();
+
+        let status = budget_status_impl(&conn, "2026-06-01", "2026-06-30").unwrap();
+        assert_eq!(status.len(), 1, "upsert must not create a duplicate budget row");
+        assert_eq!(status[0].monthly_limit, 2_000.0);
+    }
+
+    #[test]
+    fn delete_budget_removes_row() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        set_budget_impl(&conn, &SetBudgetPayload { category: "Food".into(), monthly_limit: 1_000.0 }).unwrap();
+        delete_budget_impl(&conn, "Food").unwrap();
+
+        let status = budget_status_impl(&conn, "2026-06-01", "2026-06-30").unwrap();
+        assert!(status.is_empty());
+    }
+
+    #[test]
+    fn monthly_trend_groups_income_and_expense_per_month() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        insert_txn(&conn, "2026-05-10", "income", 50_000.0, "Salary");
+        insert_txn(&conn, "2026-05-15", "expense", 8_000.0, "Rent");
+        insert_txn(&conn, "2026-06-10", "income", 50_000.0, "Salary");
+
+        // months <= 0 → all history, newest month first
+        let trend = monthly_trend_impl(&conn, 0).unwrap();
+        assert_eq!(trend.len(), 2);
+        assert_eq!(trend[0].month, "2026-06");
+        assert_eq!(trend[0].income, 50_000.0);
+        assert_eq!(trend[0].expense, 0.0);
+        assert_eq!(trend[1].month, "2026-05");
+        assert_eq!(trend[1].income, 50_000.0);
+        assert_eq!(trend[1].expense, 8_000.0);
+    }
+
+    #[test]
+    fn period_bounds_custom_widens_end_to_end_of_day() {
+        let (start, end) = period_bounds("custom", Some("2026-01-01".into()), Some("2026-01-31".into()));
+        assert_eq!(start, "2026-01-01");
+        assert_eq!(end, "2026-01-31 23:59:59");
+    }
+
+    #[test]
+    fn period_bounds_custom_without_dates_falls_back_to_all_time() {
+        let (start, end) = period_bounds("custom", None, None);
+        assert_eq!(start, "1900-01-01");
+        assert_eq!(end, "2099-12-31");
+    }
 }
