@@ -209,8 +209,9 @@ pub fn seed_dummy_data(state: State<DbState>) -> Result<()> {
     )?;
 
     // ── Bonds ────────────────────────────────────────────────────────────────
-    let bonds: &[(&str, &str, &str, f64, f64, f64, f64, f64, &str, &str, &str)] = &[
-        // (isin, issuer, bond_type, face_value, qty, buy_price, curr_price, coupon_rate, coupon_freq, purchase_date, maturity_date)
+    // (isin, issuer, bond_type, face_value, qty, buy_price, curr_price, coupon_rate, coupon_freq, purchase_date, maturity_date)
+    type BondSeed<'a> = (&'a str, &'a str, &'a str, f64, f64, f64, f64, f64, &'a str, &'a str, &'a str);
+    let bonds: &[BondSeed] = &[
         ("IN0020220178", "Government of India",          "government", 1000.0, 50.0,  982.0,  1010.0, 7.26, "semi_annual", "2023-03-15", "2033-03-15"),
         ("INE001A07BS8", "HDFC Ltd NCD",                 "ncd",        1000.0, 25.0,  995.0,  1020.0, 8.45, "quarterly",   "2022-09-01", "2027-09-01"),
         ("INE062A08330", "Indian Railway Finance Corp",  "tax_free",   1000.0, 100.0, 1005.0, 1030.0, 5.13, "annual",      "2021-11-20", "2031-11-20"),

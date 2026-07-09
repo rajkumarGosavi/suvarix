@@ -33,6 +33,12 @@ pub fn verify_master_password(
 ) -> Result<bool> {
     let ok = state.0.unlock(&password)?;
     if ok {
+        // Runs before the sync scheduler starts, so a first-ever-run cleanup
+        // (see `run_dedupe_once_on_unlock`) finishes before this device could
+        // export any of the duplicates it's about to delete.
+        if let Err(e) = crate::backup::commands::run_dedupe_once_on_unlock(&state.0) {
+            tracing::warn!("one-time duplicate cleanup failed: {e}");
+        }
         scheduler.start(app.clone(), state.0.clone());
         sync_scheduler.start(app, state.0.clone());
     }

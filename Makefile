@@ -78,9 +78,13 @@ coverage: coverage-rust coverage-frontend
 lint:
 	OPENSSL_SRC_PERL=$(OPENSSL_SRC_PERL) cargo clippy --manifest-path src-tauri/Cargo.toml
 
-# Clean Rust + frontend + generated mobile project build artifacts
+# Clean Rust + frontend + generated mobile project build artifacts.
+# Plain `rm -rf` instead of `cargo clean`: openssl-sys's build script writes a
+# file literally named `NUL` under target/debug/build/openssl-sys-*/out/ (a
+# reserved Windows device name) — `cargo clean`'s metadata walk chokes on it
+# ("Incorrect function", os error 1). Git Bash's `rm` handles it fine.
 clean:
-	cargo clean --manifest-path src-tauri/Cargo.toml
+	rm -rf src-tauri/target || true
 	node -e "['dist','coverage','src-tauri/gen'].forEach(d=>require('fs').rmSync(d,{recursive:true,force:true}))"
 
 # Check for leftover dev processes (Vite port 1420, suvarix.exe) that block clean/dev

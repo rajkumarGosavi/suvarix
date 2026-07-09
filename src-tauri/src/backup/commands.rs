@@ -600,6 +600,216 @@ pub fn sync_now(app: AppHandle, state: State<DbState>) -> Result<crate::backup::
     crate::backup::scheduler::run_tick(&app, &state.0)
 }
 
+// ── One-time duplicate cleanup ───────────────────────────────────
+// Devices that had pre-existing rows when MIGRATION_019 backfilled `sync_id`
+// each minted their own random ids for the *same* logical rows (see the
+// migration's backfill UPDATE). The very first merge sync between such
+// devices therefore imported every one of those rows as "new" — nothing
+// recognized them as the same row, since the merge only matches by
+// `sync_id` — doubling every table with no UNIQUE constraint to catch it
+// (the way default milestones are). This is a one-time cleanup for damage
+// already done, not a fix to the ongoing merge path — `apply_backup_payload_merge`
+// itself is correct once every device's rows carry a stable, matching `sync_id`.
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DedupeSummary {
+    pub tables_affected: usize,
+    pub rows_removed: usize,
+}
+
+/// Content fingerprint for duplicate detection — every column except the
+/// three that are expected to legitimately differ between two rows that are
+/// otherwise the same logical entity: `id` (per-device local key), `sync_id`
+/// (independently minted per device at backfill time — the whole reason this
+/// cleanup exists) and `sync_updated_at` (a merge clock, not row content).
+fn fingerprint_row(obj: &serde_json::Map<String, serde_json::Value>) -> String {
+    let mut pairs: Vec<(&String, &serde_json::Value)> =
+        obj.iter().filter(|(k, _)| !matches!(k.as_str(), "id" | "sync_id" | "sync_updated_at")).collect();
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    serde_json::to_string(&pairs).unwrap_or_default()
+}
+
+/// Rewrites `row`'s FK columns using `id_maps` built by dedup passes over
+/// earlier (parent) tables so far — unlike `remap_row_fks` (used during
+/// import merge), an id absent from the map means "this parent wasn't
+/// deduped," not "this parent is missing," so the column is left untouched
+/// rather than nulled out or treated as a required-FK failure.
+fn remap_fk_if_deduped(
+    table: &str,
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    id_maps: &HashMap<&'static str, HashMap<i64, i64>>,
+) -> bool {
+    let mut changed = false;
+    for &(col, ref_table, _required) in fk_columns(table) {
+        let Some(id) = row.get(col).and_then(|v| v.as_i64()) else { continue };
+        if let Some(&new_id) = id_maps.get(ref_table).and_then(|m| m.get(&id)) {
+            row.insert(col.to_string(), serde_json::json!(new_id));
+            changed = true;
+        }
+    }
+    if table == "transactions" {
+        if let Some(id) = row.get("holding_id").and_then(|v| v.as_i64()) {
+            let asset_class = row.get("asset_class").and_then(|v| v.as_str()).unwrap_or("");
+            if let Some(&new_id) = holding_table_for_asset_class(asset_class)
+                .and_then(|t| id_maps.get(t))
+                .and_then(|m| m.get(&id))
+            {
+                row.insert("holding_id".to_string(), serde_json::json!(new_id));
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// One-time cleanup for the migration-backfill duplicate bug: walks
+/// `SYNC_TABLES` in FK-safe (parent-first) order, and within each table
+/// groups rows by content fingerprint. A group with more than one row is a
+/// duplicate set — keeps the row with the lexicographically smallest
+/// `sync_id` (a deterministic, content-only rule so independent runs on two
+/// different devices converge on the *same* surviving row rather than each
+/// keeping its own), and deletes the rest. Deletion goes through a normal
+/// `DELETE`, so the existing `trg_<table>_tombstone` trigger fires and the
+/// removal propagates to other devices on the next sync exactly like any
+/// other delete — no special-casing needed here.
+///
+/// Child tables get their FK columns rewritten (via `remap_fk_if_deduped`)
+/// before fingerprinting, using the id map built from parent tables' own
+/// dedup pass — so e.g. two duplicate transactions that each point at a
+/// different (but now-deduped) duplicate account row are recognized as the
+/// same content instead of missed because of a stale FK.
+pub(crate) fn dedupe_duplicate_rows_impl(db: &DbPool) -> Result<DedupeSummary> {
+    let mut conn = db.get()?;
+    conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(|e| AppError::Database(e.to_string()))?;
+
+    let result = (|| -> Result<DedupeSummary> {
+        let tx = conn.transaction()?;
+        let mut id_maps: HashMap<&'static str, HashMap<i64, i64>> = HashMap::new();
+        let mut tables_affected = 0usize;
+        let mut rows_removed = 0usize;
+
+        for &table in SYNC_TABLES {
+            id_maps.entry(table).or_default();
+            let rows = dump_table(&tx, table)?;
+            if rows.is_empty() {
+                continue;
+            }
+
+            let objs: Vec<serde_json::Map<String, serde_json::Value>> =
+                rows.into_iter().filter_map(|r| r.as_object().cloned()).collect();
+
+            // FK remap is computed in memory only, never written yet — a table
+            // can carry its own UNIQUE constraint (e.g. equity_holdings on
+            // `account_id, isin`), so writing the remapped value to a
+            // still-live duplicate before it's deleted can collide with the
+            // duplicate that hasn't been removed yet.
+            let remapped: Vec<(bool, serde_json::Map<String, serde_json::Value>)> = objs
+                .into_iter()
+                .map(|obj| {
+                    let mut copy = obj.clone();
+                    let changed = remap_fk_if_deduped(table, &mut copy, &id_maps);
+                    (changed, copy)
+                })
+                .collect();
+
+            let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+            for (i, (_, obj)) in remapped.iter().enumerate() {
+                groups.entry(fingerprint_row(obj)).or_default().push(i);
+            }
+
+            let mut touched = false;
+            let mut survivors: Vec<usize> = Vec::new();
+            for (_, mut idxs) in groups {
+                if idxs.len() < 2 {
+                    survivors.push(idxs[0]);
+                    continue;
+                }
+                idxs.sort_by(|&a, &b| {
+                    let sa = remapped[a].1.get("sync_id").and_then(|v| v.as_str()).unwrap_or_default();
+                    let sb = remapped[b].1.get("sync_id").and_then(|v| v.as_str()).unwrap_or_default();
+                    sa.cmp(sb)
+                });
+                let keep_idx = idxs[0];
+                let keep_id = remapped[keep_idx].1.get("id").and_then(|v| v.as_i64()).unwrap();
+                survivors.push(keep_idx);
+                for &dup_idx in &idxs[1..] {
+                    let dup_id = remapped[dup_idx].1.get("id").and_then(|v| v.as_i64()).unwrap();
+                    tx.execute(&format!("DELETE FROM \"{table}\" WHERE id = ?1"), [dup_id])
+                        .map_err(|e| AppError::Database(format!("dedupe delete {table}: {e}")))?;
+                    id_maps.get_mut(table).unwrap().insert(dup_id, keep_id);
+                    rows_removed += 1;
+                    touched = true;
+                }
+            }
+
+            // Now that duplicates are gone, it's safe to persist the FK remap
+            // for whichever row of each group survived.
+            for &i in &survivors {
+                if remapped[i].0 {
+                    let id = remapped[i].1.get("id").and_then(|v| v.as_i64()).unwrap();
+                    update_row_by_id(&tx, table, id, &remapped[i].1)?;
+                }
+            }
+
+            if touched {
+                tables_affected += 1;
+            }
+        }
+
+        tx.commit()?;
+        Ok(DedupeSummary { tables_affected, rows_removed })
+    })();
+
+    let _ = conn.execute_batch("PRAGMA foreign_keys = ON");
+    result
+}
+
+/// One-time cleanup command for the migration-backfill duplicate bug — see
+/// `dedupe_duplicate_rows_impl`. Safe to run more than once (a second run
+/// finds no duplicate groups and is a no-op) and safe to run independently
+/// on each device (the keep-rule is deterministic by content, so both sides
+/// converge on the same surviving row).
+#[tauri::command]
+pub fn dedupe_duplicate_rows(state: State<DbState>) -> Result<DedupeSummary> {
+    dedupe_duplicate_rows_impl(&state.0)
+}
+
+const SETTING_DEDUPE_V1_APPLIED: &str = "dedupe_v1_applied";
+
+/// Runs `dedupe_duplicate_rows_impl` automatically, once ever per device,
+/// right after unlock — no user action, no UI, no manual command. Gated by
+/// an `app_settings` flag (same idempotent-flag pattern as MIGRATION_017's
+/// `notified_reminder_ids`) so it's a no-op on every unlock after the first.
+/// Runs before the sync scheduler starts so the very next outgoing sync
+/// already reflects the cleaned-up local state instead of re-exporting
+/// duplicates that were about to be deleted.
+pub(crate) fn run_dedupe_once_on_unlock(db: &DbPool) -> Result<Option<DedupeSummary>> {
+    {
+        let conn = db.get()?;
+        let already: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key=?1",
+                [SETTING_DEDUPE_V1_APPLIED],
+                |r| r.get(0),
+            )
+            .ok();
+        if already.as_deref() == Some("true") {
+            return Ok(None);
+        }
+    }
+    let summary = dedupe_duplicate_rows_impl(db)?;
+    {
+        let conn = db.get()?;
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, 'true')
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [SETTING_DEDUPE_V1_APPLIED],
+        )?;
+    }
+    Ok(Some(summary))
+}
+
 // ── Android auto-sync folder (SAF) ───────────────────────────────
 // tauri-plugin-dialog has no directory picker on Android (desktop-only), so
 // auto-sync's folder picker uses tauri-plugin-android-fs there instead. That
@@ -829,16 +1039,15 @@ fn dump_table(conn: &rusqlite::Connection, table: &str) -> Result<Vec<serde_json
         .prepare(&format!("SELECT * FROM \"{table}\""))
         .map_err(|e| AppError::Database(format!("prepare {table}: {e}")))?;
     let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
-    let col_count = col_names.len();
     let rows = stmt
         .query_map([], |row| {
             let mut map = serde_json::Map::new();
-            for i in 0..col_count {
+            for (i, col) in col_names.iter().enumerate() {
                 let val = match row.get_ref(i) {
                     Ok(vref) => value_ref_to_json(vref),
                     Err(_) => serde_json::Value::Null,
                 };
-                map.insert(col_names[i].clone(), val);
+                map.insert(col.clone(), val);
             }
             Ok(serde_json::Value::Object(map))
         })
@@ -1276,5 +1485,215 @@ mod tests {
         let conn = db_b.get().unwrap();
         let fk: i64 = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
         assert_eq!(fk, 1, "foreign_keys must be re-enabled after import");
+    }
+
+    // ── One-time duplicate cleanup (dedupe_duplicate_rows_impl) ──
+    // Reproduces the migration-backfill bug: two devices independently seed
+    // identical content (their own `sync_id`s minted at backfill time), then
+    // sync in both directions — the exact sequence that doubled every
+    // non-UNIQUE-constrained table on first sync.
+
+    fn duplicate_via_first_sync(db_a: &crate::db::DbPool, db_b: &crate::db::DbPool) {
+        seed_source_db(db_a);
+        seed_source_db(db_b);
+        let payload_a = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(db_b, &payload_a).unwrap();
+        let payload_b = { build_backup_payload(&db_b.get().unwrap()).unwrap().0 };
+        apply_backup_payload(db_a, &payload_b).unwrap();
+    }
+
+    fn row_count(db: &crate::db::DbPool, table: &str) -> i64 {
+        db.get().unwrap().query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn dedupe_collapses_duplicate_rows_from_first_sync() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        duplicate_via_first_sync(&db_a, &db_b);
+
+        assert_eq!(row_count(&db_a, "accounts"), 2, "precondition: doubled by the first sync");
+        assert_eq!(row_count(&db_a, "equity_holdings"), 2, "precondition: doubled by the first sync");
+
+        let summary = dedupe_duplicate_rows_impl(&db_a).unwrap();
+        assert_eq!(summary.rows_removed, 2, "one duplicate account + one duplicate holding");
+        assert_eq!(summary.tables_affected, 2);
+        assert_eq!(row_count(&db_a, "accounts"), 1);
+        assert_eq!(row_count(&db_a, "equity_holdings"), 1);
+    }
+
+    #[test]
+    fn dedupe_remaps_child_fk_to_surviving_parent() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        duplicate_via_first_sync(&db_a, &db_b);
+
+        dedupe_duplicate_rows_impl(&db_a).unwrap();
+
+        let conn = db_a.get().unwrap();
+        let account_id: i64 = conn.query_row("SELECT id FROM accounts", [], |r| r.get(0)).unwrap();
+        let holding_account_id: i64 =
+            conn.query_row("SELECT account_id FROM equity_holdings", [], |r| r.get(0)).unwrap();
+        assert_eq!(
+            holding_account_id, account_id,
+            "the surviving holding must point at the surviving account, not a deleted duplicate"
+        );
+    }
+
+    #[test]
+    fn dedupe_is_idempotent() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        duplicate_via_first_sync(&db_a, &db_b);
+
+        dedupe_duplicate_rows_impl(&db_a).unwrap();
+        let second = dedupe_duplicate_rows_impl(&db_a).unwrap();
+        assert_eq!(second.rows_removed, 0, "second run must find nothing left to dedupe");
+        assert_eq!(second.tables_affected, 0);
+    }
+
+    #[test]
+    fn dedupe_deletes_propagate_to_other_device_via_tombstone() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        duplicate_via_first_sync(&db_a, &db_b);
+
+        dedupe_duplicate_rows_impl(&db_a).unwrap();
+        assert_eq!(row_count(&db_b, "accounts"), 2, "precondition: B still has its own duplicate");
+
+        // A re-exports — now carrying a tombstone for the row it just deleted
+        // via the ordinary `trg_accounts_tombstone` trigger — and B applies it.
+        let payload = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(&db_b, &payload).unwrap();
+
+        assert_eq!(row_count(&db_b, "accounts"), 1, "B's duplicate must be removed by the propagated tombstone");
+    }
+
+    #[test]
+    fn dedupe_run_independently_on_both_devices_converges_on_same_row() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        duplicate_via_first_sync(&db_a, &db_b);
+
+        // Both devices dedupe entirely on their own, with no further sync
+        // between them — the deterministic tie-break (smallest sync_id) must
+        // still pick the same surviving row on each side, so a real user
+        // running this on two offline devices doesn't end up with divergent
+        // "kept" copies.
+        dedupe_duplicate_rows_impl(&db_a).unwrap();
+        dedupe_duplicate_rows_impl(&db_b).unwrap();
+
+        let sync_id_of_account = |db: &crate::db::DbPool| -> String {
+            db.get().unwrap().query_row("SELECT sync_id FROM accounts", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(
+            sync_id_of_account(&db_a),
+            sync_id_of_account(&db_b),
+            "independent dedupe on both devices must keep the same row"
+        );
+    }
+
+    #[test]
+    fn dedupe_leaves_genuinely_distinct_rows_alone() {
+        let (_dir, db) = test_db_pool();
+        {
+            let conn = db.get().unwrap();
+            conn.execute("INSERT INTO accounts (name, type) VALUES ('Alpha', 'bank')", []).unwrap();
+            conn.execute("INSERT INTO accounts (name, type) VALUES ('Beta', 'bank')", []).unwrap();
+        }
+
+        let summary = dedupe_duplicate_rows_impl(&db).unwrap();
+        assert_eq!(summary.rows_removed, 0, "distinct content must never be treated as a duplicate");
+        assert_eq!(row_count(&db, "accounts"), 2);
+    }
+
+    #[test]
+    fn dedupe_no_op_on_fresh_db_with_no_duplicates() {
+        let (_dir, db) = test_db_pool();
+        seed_source_db(&db);
+
+        let summary = dedupe_duplicate_rows_impl(&db).unwrap();
+        assert_eq!(summary.rows_removed, 0);
+        assert_eq!(summary.tables_affected, 0);
+    }
+
+    // ── One-time-on-unlock gating (run_dedupe_once_on_unlock) ──
+
+    #[test]
+    fn run_dedupe_once_on_unlock_runs_the_first_time() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        duplicate_via_first_sync(&db_a, &db_b);
+
+        let outcome = run_dedupe_once_on_unlock(&db_a).unwrap();
+        let summary = outcome.expect("must run on first-ever call");
+        assert_eq!(summary.rows_removed, 2);
+        assert_eq!(row_count(&db_a, "accounts"), 1);
+    }
+
+    #[test]
+    fn run_dedupe_once_on_unlock_is_a_no_op_on_later_unlocks() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        duplicate_via_first_sync(&db_a, &db_b);
+
+        run_dedupe_once_on_unlock(&db_a).unwrap();
+        assert_eq!(row_count(&db_a, "accounts"), 1, "precondition: first run already cleaned up");
+
+        // A *different* pair of duplicate-content rows appears later (e.g. a
+        // second, unrelated pre-existing-data collision this cleanup never
+        // saw) — unlike the tombstoned pair from the first run, there's
+        // nothing here to stop `dedupe_duplicate_rows_impl` from collapsing
+        // it if it ran. The once-only flag must still suppress it: only the
+        // explicit manual command should touch data after the first unlock.
+        db_a.get()
+            .unwrap()
+            .execute("INSERT INTO accounts (name, type) VALUES ('Alpha', 'bank')", [])
+            .unwrap();
+        db_a.get()
+            .unwrap()
+            .execute("INSERT INTO accounts (name, type) VALUES ('Alpha', 'bank')", [])
+            .unwrap();
+        assert_eq!(row_count(&db_a, "accounts"), 3, "precondition: a new duplicate pair exists");
+
+        let outcome = run_dedupe_once_on_unlock(&db_a).unwrap();
+        assert!(outcome.is_none(), "must not run again after the flag is set");
+        assert_eq!(row_count(&db_a, "accounts"), 3, "the flag gate must leave later duplicates untouched");
+    }
+
+    // ── Wipe All Data must not block a subsequent restore (sync_tombstones) ──
+    // Every `DELETE` in `wipe_all_data_impl` fires the row's tombstone trigger,
+    // so without also clearing `sync_tombstones`, importing a backup taken
+    // *before* the wipe looks — to the merge's own newer-tombstone check — like
+    // resurrecting something this device deliberately deleted, and every row
+    // is silently skipped. This is the exact bug behind "0 records restored."
+
+    #[test]
+    fn wipe_then_import_backup_actually_restores_data() {
+        let (_dir_a, db_a) = test_db_pool();
+        seed_source_db(&db_a);
+
+        // The backup a user would export before wiping.
+        let payload = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+
+        crate::settings::commands::wipe_all_data_impl(&db_a).unwrap();
+        assert_eq!(row_count(&db_a, "accounts"), 0, "precondition: wipe cleared everything");
+
+        let summary = apply_backup_payload(&db_a, &payload).unwrap();
+        assert!(summary.rows_imported > 0, "importing a pre-wipe backup must actually restore rows, not no-op");
+        assert_eq!(row_count(&db_a, "accounts"), 1, "the account must come back");
+        assert_eq!(row_count(&db_a, "equity_holdings"), 1, "the equity holding must come back");
+    }
+
+    #[test]
+    fn wipe_all_data_clears_sync_tombstones() {
+        let (_dir_a, db_a) = test_db_pool();
+        seed_source_db(&db_a);
+
+        crate::settings::commands::wipe_all_data_impl(&db_a).unwrap();
+
+        let tombstones: i64 =
+            db_a.get().unwrap().query_row("SELECT count(*) FROM sync_tombstones", [], |r| r.get(0)).unwrap();
+        assert_eq!(tombstones, 0, "a wipe must not leave tombstones behind to block a future restore");
     }
 }

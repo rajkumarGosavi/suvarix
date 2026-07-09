@@ -10,6 +10,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     conn.execute_batch(MIGRATION_006).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_007).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_008).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute_batch(DEFAULT_MILESTONES_SEED).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_009).map_err(|e| AppError::Database(e.to_string()))?;
     // MIGRATION_010 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
     let _ = conn.execute_batch(MIGRATION_010);
@@ -34,6 +35,8 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // and backfilled from any category text already present (e.g. from CSV imports) —
     // idempotent (CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE throughout).
     conn.execute_batch(MIGRATION_015).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute_batch(DEFAULT_CATEGORIES_SEED).map_err(|e| AppError::Database(e.to_string()))?;
+    conn.execute_batch(MIGRATION_015_BACKFILL).map_err(|e| AppError::Database(e.to_string()))?;
     // MIGRATION_016 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
     let _ = conn.execute_batch(MIGRATION_016);
     // MIGRATION_017: reminder-scheduler dedup state — INSERT OR IGNORE is idempotent
@@ -556,16 +559,11 @@ CREATE TABLE IF NOT EXISTS recurring_transactions (
 );
 ";
 
-const MIGRATION_008: &str = "
-CREATE TABLE IF NOT EXISTS milestones (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    amount      REAL NOT NULL UNIQUE,
-    label       TEXT NOT NULL,
-    is_custom   INTEGER NOT NULL DEFAULT 0,
-    achieved_at TEXT,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
+/// The 9 default net-worth milestones — shared with `settings::commands::wipe_all_data`,
+/// which re-seeds them after a wipe (the table also holds user-added custom
+/// milestones and `achieved_at` progress, so a wipe means a real `DELETE`,
+/// not something a migration's `IF NOT EXISTS` would ever re-run).
+pub(crate) const DEFAULT_MILESTONES_SEED: &str = "
 INSERT OR IGNORE INTO milestones (amount, label, is_custom) VALUES
     (100000,    '₹1 Lakh',     0),
     (500000,    '₹5 Lakh',     0),
@@ -576,6 +574,17 @@ INSERT OR IGNORE INTO milestones (amount, label, is_custom) VALUES
     (25000000,  '₹2.5 Crore',  0),
     (50000000,  '₹5 Crore',    0),
     (100000000, '₹10 Crore',   0);
+";
+
+const MIGRATION_008: &str = "
+CREATE TABLE IF NOT EXISTS milestones (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    amount      REAL NOT NULL UNIQUE,
+    label       TEXT NOT NULL,
+    is_custom   INTEGER NOT NULL DEFAULT 0,
+    achieved_at TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 ";
 
 const MIGRATION_009: &str = "
@@ -684,18 +693,26 @@ INSERT OR IGNORE INTO badges (id, name, description, icon, xp_reward) VALUES
 // Shared, user-manageable category list for transactions/budgets/recurring transactions.
 // Seeded with the legacy hardcoded defaults, then backfilled with any category text already
 // present in existing data (e.g. imported from another app) so nothing is lost or hidden.
+/// The 13 default category names — shared with `settings::commands::wipe_all_data`,
+/// which re-seeds them after a wipe (unlike a fresh migration, a wipe leaves
+/// no transaction/budget data behind to backfill from, so only this part of
+/// MIGRATION_015 applies).
+pub(crate) const DEFAULT_CATEGORIES_SEED: &str = "
+INSERT OR IGNORE INTO categories (name) VALUES
+    ('Food'), ('Rent'), ('EMI'), ('Travel'), ('Medical'), ('Utilities'),
+    ('Entertainment'), ('Education'), ('Shopping'), ('Dividend'), ('Interest'),
+    ('Salary'), ('Other');
+";
+
 const MIGRATION_015: &str = "
 CREATE TABLE IF NOT EXISTS categories (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT UNIQUE NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+";
 
-INSERT OR IGNORE INTO categories (name) VALUES
-    ('Food'), ('Rent'), ('EMI'), ('Travel'), ('Medical'), ('Utilities'),
-    ('Entertainment'), ('Education'), ('Shopping'), ('Dividend'), ('Interest'),
-    ('Salary'), ('Other');
-
+const MIGRATION_015_BACKFILL: &str = "
 INSERT OR IGNORE INTO categories (name)
     SELECT DISTINCT category FROM transactions WHERE category IS NOT NULL AND category != '';
 INSERT OR IGNORE INTO categories (name)

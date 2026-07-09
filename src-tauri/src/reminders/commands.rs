@@ -248,7 +248,7 @@ pub fn upcoming_reminders(pool: &DbPool, days: i32) -> Result<Vec<UpcomingRemind
         for row in rows.flatten() {
             let (id, bank, card_name, min_pay, due_day_opt) = row;
             let Some(due_day) = due_day_opt else { continue };
-            if due_day < 1 || due_day > 31 { continue; }
+            if !(1..=31).contains(&due_day) { continue; }
             let due_day = due_day as u32;
 
             // Compute next occurrence of this day-of-month
@@ -443,8 +443,11 @@ pub fn apply_recurring(ids: Vec<i64>, state: State<DbState>) -> Result<i32> {
     let today_str = today.format("%Y-%m-%d").to_string();
     let mut applied = 0i32;
 
+    // (name, type, amount, category, asset_class, description, notes, frequency, next_due_date)
+    type RecurringRow = (String, String, f64, String, Option<String>, Option<String>, Option<String>, String, String);
+
     for id in ids {
-        let row: std::result::Result<(String, String, f64, String, Option<String>, Option<String>, Option<String>, String, String), _> =
+        let row: std::result::Result<RecurringRow, _> =
             conn.query_row(
                 "SELECT name, type, amount, category, asset_class, description, notes, frequency, next_due_date
                  FROM recurring_transactions WHERE id=?1",
@@ -618,7 +621,7 @@ pub fn get_calendar_events(year: i32, month: u32, state: State<DbState>) -> Resu
         for row in rows.flatten() {
             let (id, bank, card_name, min_pay, balance, due_day_opt) = row;
             let Some(due_day) = due_day_opt else { continue };
-            if due_day < 1 || due_day > 31 { continue; }
+            if !(1..=31).contains(&due_day) { continue; }
             let due_day = due_day as u32;
             let clamped = due_day.min(days_in_month(year, month));
             if let Some(due) = NaiveDate::from_ymd_opt(year, month, clamped) {

@@ -278,7 +278,7 @@ pub async fn sync_zerodha_holdings(state: State<'_, DbState>) -> Result<SyncResu
     // Write to DB (lock → write → release)
     {
         let mut conn = state.0.get()?;
-        broker::write_broker_holdings(&mut *conn, "zerodha", "Zerodha", &holdings)?;
+        broker::write_broker_holdings(&mut conn, "zerodha", "Zerodha", &holdings)?;
     }
 
     Ok(SyncResult { synced, errors: vec![] })
@@ -436,7 +436,7 @@ pub async fn sync_upstox_holdings(state: State<'_, DbState>) -> Result<SyncResul
     // Write to DB (lock → write → release)
     {
         let mut conn = state.0.get()?;
-        broker::write_broker_holdings(&mut *conn, "upstox", "Upstox", &holdings)?;
+        broker::write_broker_holdings(&mut conn, "upstox", "Upstox", &holdings)?;
     }
 
     Ok(SyncResult { synced, errors: vec![] })
@@ -612,7 +612,7 @@ pub async fn sync_angel_holdings(state: State<'_, DbState>) -> Result<SyncResult
     // Write to DB (lock → write → release)
     {
         let mut conn = state.0.get()?;
-        broker::write_broker_holdings(&mut *conn, "angel_one", "Angel One", &holdings)?;
+        broker::write_broker_holdings(&mut conn, "angel_one", "Angel One", &holdings)?;
     }
 
     Ok(SyncResult { synced, errors: vec![] })
@@ -675,7 +675,7 @@ pub fn import_broker_equity_csv(
     let skipped = (rows.len() as i64) - (holdings.len() as i64);
 
     let mut conn = state.0.get()?;
-    let imported = broker::write_broker_holdings(&mut *conn, &broker, &display_name, &holdings)?;
+    let imported = broker::write_broker_holdings(&mut conn, &broker, &display_name, &holdings)?;
 
     Ok(ImportResult { imported, skipped })
 }
