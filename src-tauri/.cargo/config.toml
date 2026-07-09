@@ -1,5 +1,0 @@
-[env]
-# Git's bundled perl (cygwin-style paths) breaks openssl-sys build script on Windows.
-# force = true because a User-level OPENSSL_SRC_PERL (pointing at Git's perl) is already
-# set on this machine — cargo [env] only applies when unset unless forced.
-OPENSSL_SRC_PERL = { value = "C:/Strawberry/perl/bin/perl.exe", force = true }
