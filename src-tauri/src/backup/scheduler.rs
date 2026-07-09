@@ -69,8 +69,6 @@ const SYNC_IMPORTED_EVENT: &str = "auto-sync-imported";
 fn spawn_sync_loop(app: AppHandle, db: Arc<DbPool>) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
         loop {
-            let interval_min = read_interval_minutes(&db).unwrap_or(DEFAULT_INTERVAL_MIN);
-            tokio::time::sleep(Duration::from_secs(interval_min.max(MIN_INTERVAL_MIN) * 60)).await;
             match run_tick(&app, &db) {
                 // Only notify the UI when this tick actually pulled newer data
                 // from another device — a routine push-only tick (no diff)
@@ -85,6 +83,9 @@ fn spawn_sync_loop(app: AppHandle, db: Arc<DbPool>) -> tauri::async_runtime::Joi
                     tracing::warn!("auto-sync tick skipped: {e}");
                 }
             }
+
+            let interval_min = read_interval_minutes(&db).unwrap_or(DEFAULT_INTERVAL_MIN);
+            tokio::time::sleep(Duration::from_secs(interval_min.max(MIN_INTERVAL_MIN) * 60)).await;
         }
     })
 }
