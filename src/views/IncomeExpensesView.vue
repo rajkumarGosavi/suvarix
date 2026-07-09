@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, computed, ref } from "vue";
+import { useConfirm } from "primevue/useconfirm";
 import { useBudgetStore } from "@/stores/budget";
 import { useCategoriesStore } from "@/stores/categories";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
@@ -21,6 +22,7 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 const store = useBudgetStore();
 const categoriesStore = useCategoriesStore();
+const confirm = useConfirm();
 const { formatINR, formatCompact } = useCurrencyFormat();
 const { textColor, mutedColor, gridColor } = useChartColors();
 
@@ -122,6 +124,17 @@ async function saveBudget() {
     } finally {
         budgetLoading.value = false;
     }
+}
+
+function confirmDeleteBudget(category: string) {
+    confirm.require({
+        message: `Remove budget for ${category}?`,
+        header: "Delete Budget",
+        icon: "pi pi-trash",
+        rejectProps: { label: "Cancel", outlined: true },
+        acceptProps: { label: "Delete" },
+        accept: () => store.deleteBudget(category),
+    });
 }
 
 const incomeSummary = computed(() =>
@@ -277,10 +290,12 @@ onMounted(() => {
                     <Column field="remaining" header="Remaining" style="width:130px">
                         <template #body="{ data }">{{ formatINR(data.remaining) }}</template>
                     </Column>
-                    <Column header="" style="width:60px">
+                    <Column header="" style="width:90px">
                         <template #body="{ data }">
                             <Button icon="pi pi-pencil" text size="small"
                                 @click="openSetBudget(data.category, data.monthlyLimit)" />
+                            <Button icon="pi pi-trash" text size="small" severity="danger"
+                                @click="confirmDeleteBudget(data.category)" />
                         </template>
                     </Column>
                 </DataTable>

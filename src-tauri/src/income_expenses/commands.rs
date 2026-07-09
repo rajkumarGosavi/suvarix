@@ -94,6 +94,13 @@ pub fn set_budget(payload: SetBudgetPayload, state: State<DbState>) -> Result<()
 }
 
 #[tauri::command]
+pub fn delete_budget(category: String, state: State<DbState>) -> Result<()> {
+    let conn = state.0.get()?;
+    conn.execute("DELETE FROM budgets WHERE category = ?1", [category])?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_monthly_trend(months: i64, state: State<DbState>) -> Result<Vec<MonthlyTrend>> {
     let conn = state.0.get()?;
     let mut stmt = conn.prepare(

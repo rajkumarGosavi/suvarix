@@ -212,6 +212,7 @@ pub fn run() {
             income_expenses::commands::get_category_summary,
             income_expenses::commands::get_budget_status,
             income_expenses::commands::set_budget,
+            income_expenses::commands::delete_budget,
             income_expenses::commands::get_monthly_trend,
             // prices
             prices::commands::refresh_equity_prices,

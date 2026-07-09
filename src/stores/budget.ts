@@ -63,5 +63,10 @@ export const useBudgetStore = defineStore("budget", {
             await invoke("set_budget", { payload: { category, monthlyLimit } });
             await this.fetchAll(this.currentPeriod, this.currentCustomStart, this.currentCustomEnd);
         },
+
+        async deleteBudget(category: string) {
+            await invoke("delete_budget", { category });
+            await this.fetchAll(this.currentPeriod, this.currentCustomStart, this.currentCustomEnd);
+        },
     },
 });

@@ -325,7 +325,7 @@ pub fn seed_dummy_data(state: State<DbState>) -> Result<()> {
     }
 
     // ── Budgets ──────────────────────────────────────────────────────────────
-    // INSERT OR IGNORE — no sentinel; generic categories are useful to keep
+    // INSERT OR IGNORE — no sentinel column; cleared by hardcoded category list in clear_dummy_data
     let budgets: &[(&str, f64)] = &[
         ("food", 12000.0), ("rent", 20000.0), ("utilities", 6000.0),
         ("transport", 8000.0), ("entertainment", 5000.0), ("shopping", 10000.0),
@@ -388,6 +388,11 @@ pub fn clear_dummy_data(state: State<DbState>) -> Result<()> {
     conn.execute("DELETE FROM bills WHERE notes = ?1", [DUMMY_TAG])?;
     conn.execute("DELETE FROM recurring_transactions WHERE notes = ?1", [DUMMY_TAG])?;
     conn.execute("DELETE FROM goals WHERE notes = ?1", [DUMMY_TAG])?;
+    conn.execute(
+        "DELETE FROM budgets WHERE category IN
+             ('food','rent','utilities','transport','entertainment','shopping','medical','travel')",
+        [],
+    )?;
     conn.execute("DELETE FROM net_worth_snapshots WHERE breakdown_json LIKE '%\"_dummy\"%'", [])?;
 
     Ok(())
