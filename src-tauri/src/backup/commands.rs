@@ -2265,3 +2265,202 @@ mod tests {
         assert_eq!(tombstones, 0, "a wipe must not leave tombstones behind to block a future restore");
     }
 }
+
+// ── Property-based tests (proptest) ────────────────────────────
+// Off by default — gated behind the `property-tests` feature (see
+// Cargo.toml's doc comment) and run via `make test-property`, not part of
+// the everyday `make test` loop, since each generated case spins up a real
+// temp-file SQLCipher DB. The hand-written scenario tests above check
+// specific, hand-picked cases; these check properties across many randomly
+// generated ones — the two are complementary, not a replacement for each
+// other. Scoped to the `accounts` table (no FK columns, simplest to model)
+// rather than all 21 `SYNC_TABLES`, since the point is exercising the merge
+// *decision* machinery (sync_id matching, HLC/timestamp comparison,
+// tombstones, validation), not re-deriving every table's own dedicated tests.
+#[cfg(all(test, feature = "property-tests"))]
+mod proptests {
+    use super::*;
+    use crate::test_utils::test_db_pool;
+    use proptest::prelude::*;
+
+    fn account_name_strategy() -> impl Strategy<Value = String> {
+        "[A-Za-z]{1,12}"
+    }
+
+    #[derive(Debug, Clone)]
+    enum AccountOp {
+        Insert(String),
+        Rename(usize, String),
+        Delete(usize),
+    }
+
+    fn account_op_strategy() -> impl Strategy<Value = AccountOp> {
+        prop_oneof![
+            account_name_strategy().prop_map(AccountOp::Insert),
+            (any::<usize>(), account_name_strategy()).prop_map(|(i, n)| AccountOp::Rename(i, n)),
+            any::<usize>().prop_map(AccountOp::Delete),
+        ]
+    }
+
+    /// Applies each op to `db`'s `accounts` table, in order. `Rename`/`Delete`
+    /// target the `idx`-th existing row (mod current row count) so arbitrary
+    /// `usize` values from the generator always land on a real row instead of
+    /// needing a separate "valid index" strategy — a no-op when the table's
+    /// currently empty.
+    fn apply_ops(db: &crate::db::DbPool, ops: &[AccountOp]) {
+        let conn = db.get().unwrap();
+        for op in ops {
+            let count: i64 = conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0)).unwrap();
+            match op {
+                AccountOp::Insert(name) => {
+                    conn.execute("INSERT INTO accounts (name, type) VALUES (?1, 'bank')", [name]).unwrap();
+                }
+                AccountOp::Rename(idx, new_name) if count > 0 => {
+                    let id: i64 = conn
+                        .query_row(
+                            &format!("SELECT id FROM accounts LIMIT 1 OFFSET {}", (*idx as i64) % count),
+                            [],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    conn.execute("UPDATE accounts SET name = ?1 WHERE id = ?2", rusqlite::params![new_name, id])
+                        .unwrap();
+                }
+                AccountOp::Delete(idx) if count > 0 => {
+                    let id: i64 = conn
+                        .query_row(
+                            &format!("SELECT id FROM accounts LIMIT 1 OFFSET {}", (*idx as i64) % count),
+                            [],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    conn.execute("DELETE FROM accounts WHERE id = ?1", [id]).unwrap();
+                }
+                _ => {} // Rename/Delete with nothing to target yet — no-op.
+            }
+        }
+    }
+
+    fn account_names(db: &crate::db::DbPool) -> Vec<String> {
+        let conn = db.get().unwrap();
+        let mut names: Vec<String> = conn
+            .prepare("SELECT name FROM accounts")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn sync_a_to_b(a: &crate::db::DbPool, b: &crate::db::DbPool) {
+        let payload = build_backup_payload(&a.get().unwrap()).unwrap().0;
+        apply_backup_payload(b, &payload).unwrap();
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 32, .. ProptestConfig::default() })]
+
+        /// A CRDT merge must be idempotent: replaying an unchanged remote
+        /// payload (e.g. two sync ticks in a row before either side changed
+        /// anything) must never alter the result of the first apply.
+        #[test]
+        fn merge_is_idempotent(ops in proptest::collection::vec(account_op_strategy(), 0..12)) {
+            let (_dir_a, db_a) = test_db_pool();
+            let (_dir_b, db_b) = test_db_pool();
+            apply_ops(&db_a, &ops);
+
+            let payload = build_backup_payload(&db_a.get().unwrap()).unwrap().0;
+            apply_backup_payload(&db_b, &payload).unwrap();
+            let after_first = account_names(&db_b);
+
+            apply_backup_payload(&db_b, &payload).unwrap();
+            let after_second = account_names(&db_b);
+
+            prop_assert_eq!(after_first, after_second);
+        }
+
+        /// Two devices independently mutating their own copy, then syncing
+        /// with each other, must converge on the same final content —
+        /// regardless of which side happens to pull first. Two full rounds
+        /// (not just one A->B-then-B->A pass) since a single round can leave
+        /// whichever side went second with content the other hasn't seen back
+        /// yet — real devices converge over repeated ticks, not necessarily
+        /// in exactly one round trip.
+        #[test]
+        fn two_devices_converge_regardless_of_sync_order(
+            ops_a in proptest::collection::vec(account_op_strategy(), 0..8),
+            ops_b in proptest::collection::vec(account_op_strategy(), 0..8),
+            a_first in any::<bool>(),
+        ) {
+            let (_dir_a, db_a) = test_db_pool();
+            let (_dir_b, db_b) = test_db_pool();
+            apply_ops(&db_a, &ops_a);
+            apply_ops(&db_b, &ops_b);
+
+            if a_first {
+                sync_a_to_b(&db_a, &db_b);
+                sync_a_to_b(&db_b, &db_a);
+            } else {
+                sync_a_to_b(&db_b, &db_a);
+                sync_a_to_b(&db_a, &db_b);
+            }
+            sync_a_to_b(&db_a, &db_b);
+            sync_a_to_b(&db_b, &db_a);
+
+            prop_assert_eq!(account_names(&db_a), account_names(&db_b));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 64, .. ProptestConfig::default() })]
+
+        /// Arbitrary/garbage row and tombstone shapes — not just the specific
+        /// malformed cases #2's hand-written tests picked — must never panic
+        /// the merge, only ever return `Ok` or a clean `Err`. This is the
+        /// proptest counterpart to `sanitize_hlc`/`sanitize_legacy_ts`/
+        /// `is_valid_sync_table`'s unit tests: same validation layer, random
+        /// inputs instead of hand-picked ones.
+        #[test]
+        fn merge_never_panics_on_arbitrary_row_and_tombstone_shapes(
+            garbage_name in any::<Option<String>>(),
+            garbage_sync_id in any::<Option<String>>(),
+            garbage_hlc in any::<Option<String>>(),
+            garbage_table_name in any::<String>(),
+            garbage_deleted_at in any::<String>(),
+        ) {
+            let (_dir, db) = test_db_pool();
+
+            let mut tables = HashMap::new();
+            tables.insert(
+                "accounts".to_string(),
+                vec![serde_json::json!({
+                    "id": 1,
+                    "name": garbage_name,
+                    "type": "bank",
+                    "provider": null, "external_id": null, "is_active": 1,
+                    "created_at": "2026-01-01 00:00:00", "updated_at": "2026-01-01 00:00:00",
+                    "sync_id": garbage_sync_id,
+                    "sync_updated_at": "2026-01-01 00:00:00",
+                    "sync_hlc": garbage_hlc,
+                })],
+            );
+            let payload = BackupPayload {
+                version: FORMAT_VERSION,
+                exported_at: "2026-01-01T00:00:00+00:00".to_string(),
+                tables,
+                settings: HashMap::new(),
+                tombstones: vec![TombstoneRow {
+                    table_name: garbage_table_name,
+                    sync_id: "deadbeef00000000000000000000000".to_string(),
+                    deleted_at: garbage_deleted_at,
+                    hlc: None,
+                }],
+            };
+
+            // Must never panic — Ok or Err are both fine, a crash is not.
+            let _ = apply_backup_payload(&db, &payload);
+        }
+    }
+}

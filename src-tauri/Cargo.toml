@@ -1,6 +1,6 @@
 [package]
 name = "suvarix"
-version = "0.6.17"
+version = "0.6.18"
 description = "Suvarix — Personal Finance Tracker"
 authors = ["Rajkumar"]
 license = "LicenseRef-Proprietary"
@@ -55,10 +55,14 @@ tauri-plugin-android-fs = "28.4.0"
 
 [dev-dependencies]
 tempfile = "3"
+proptest = "1"
 
 [features]
 default = []
 gamification = []
+# Property-based (proptest) merge tests — slower (many generated cases against
+# real temp-file SQLCipher DBs) and off by default; run via `make test-property`.
+property-tests = []
 
 [profile.release]
 codegen-units = 1

@@ -1,4 +1,4 @@
-.PHONY: setup dev dev-ui build release release-gami test test-unit test-frontend test-all lint clean status coverage coverage-frontend coverage-rust coverage-clean
+.PHONY: setup dev dev-ui build release release-gami test test-unit test-property test-frontend test-all lint clean status coverage coverage-frontend coverage-rust coverage-clean
 
 # Windows-only: Git's bundled perl (cygwin-style paths) breaks openssl-sys build script.
 # Set only here (not repo .cargo/config.toml) so it never leaks into mac/linux CI runners.
@@ -45,6 +45,12 @@ test-unit:
 # All Rust tests (unit + tests/ integration binaries)
 test:
 	OPENSSL_SRC_PERL=$(OPENSSL_SRC_PERL) cargo test --manifest-path src-tauri/Cargo.toml
+
+# Property-based sync merge tests (proptest) — off by default (see Cargo.toml's
+# property-tests feature) since each case spins up real temp-file SQLCipher DBs;
+# slower than the rest of the suite, run on demand rather than every `make test`.
+test-property:
+	OPENSSL_SRC_PERL=$(OPENSSL_SRC_PERL) cargo test --manifest-path src-tauri/Cargo.toml --lib --features property-tests proptests::
 
 # Frontend unit tests (vitest)
 test-frontend:
