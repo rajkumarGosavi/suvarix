@@ -46,6 +46,12 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // MIGRATION_019: sync_tombstones table + backfill + triggers — CREATE ... IF NOT EXISTS
     // and UPDATE ... WHERE col IS NULL throughout, safe to re-run.
     conn.execute_batch(&migration_019_sync_infra()).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_020 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
+    let _ = conn.execute_batch(&migration_020_add_hlc_columns());
+    // MIGRATION_021: HLC counter state + DROP/CREATE of the sync triggers to also stamp
+    // `sync_hlc` — DROP TRIGGER IF EXISTS + CREATE TRIGGER (no IF NOT EXISTS) is safe to re-run.
+    conn.execute_batch(&migration_021_hlc_state_and_triggers())
+        .map_err(|e| AppError::Database(e.to_string()))?;
     Ok(())
 }
 
@@ -157,6 +163,109 @@ CREATE TABLE IF NOT EXISTS sync_tombstones (
         ));
     }
     sql
+}
+
+/// Adds a per-row Hybrid Logical Clock column, additive and nullable exactly like
+/// `migration_018_add_sync_columns` — legacy rows (and rows from a peer device that
+/// hasn't updated yet) simply keep `sync_hlc = NULL` and fall back to the existing
+/// `sync_updated_at` wall-clock comparison at merge time (see
+/// `backup::commands::apply_backup_payload_merge`). No forced backfill.
+fn migration_020_add_hlc_columns() -> String {
+    let mut sql = String::new();
+    for table in SYNC_TABLES {
+        sql.push_str(&format!("ALTER TABLE {table} ADD COLUMN sync_hlc TEXT;\n"));
+    }
+    sql.push_str("ALTER TABLE sync_tombstones ADD COLUMN hlc TEXT;\n");
+    sql
+}
+
+/// `sync_hlc` values are `"{physical_ms:013}:{logical:09}:{device_id}"` — zero-padded
+/// so plain string comparison (`>`/`>=`, same operators the existing merge logic
+/// already uses on `sync_updated_at`) sorts chronologically. `physical_ms` is
+/// epoch milliseconds (finer resolution than `sync_updated_at`'s whole-second
+/// `datetime('now')`); `logical` is a counter that advances instead of `physical_ms`
+/// when two writes land in the same millisecond or the system clock hasn't moved
+/// forward — the standard HLC bump rule. Centralizing this bump in `sync_hlc_state`
+/// (one row, shared by every table's triggers) rather than scattering "compute and
+/// stamp the next HLC" across every command handler avoids the exact class of
+/// per-call-site drift risk `DATA_TABLES` had (see INCIDENT_REPORT.md) — one state
+/// table and one trigger-body change per table is the whole surface area.
+fn migration_021_hlc_state_and_triggers() -> String {
+    let mut sql = String::from(
+        "
+CREATE TABLE IF NOT EXISTS sync_hlc_state (
+    id               INTEGER PRIMARY KEY CHECK(id = 1),
+    last_physical_ms INTEGER NOT NULL DEFAULT 0,
+    last_logical     INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO sync_hlc_state (id, last_physical_ms, last_logical) VALUES (1, 0, 0);
+",
+    );
+    for table in SYNC_TABLES {
+        sql.push_str(&format!("DROP TRIGGER IF EXISTS trg_{table}_sync_insert;\n"));
+        sql.push_str(&format!(
+            "CREATE TRIGGER trg_{table}_sync_insert AFTER INSERT ON {table} BEGIN \
+             UPDATE sync_hlc_state SET \
+               last_logical = CASE WHEN {NOW_MS} <= last_physical_ms THEN last_logical + 1 ELSE 0 END, \
+               last_physical_ms = MAX({NOW_MS}, last_physical_ms) \
+             WHERE id = 1; \
+             UPDATE {table} SET \
+               sync_id = COALESCE(NEW.sync_id, lower(hex(randomblob(16)))), \
+               sync_updated_at = COALESCE(NEW.sync_updated_at, datetime('now')), \
+               sync_hlc = COALESCE(NEW.sync_hlc, {HLC_EXPR}) \
+             WHERE rowid = NEW.rowid; \
+             END;\n",
+            NOW_MS = NOW_MS_EXPR,
+            HLC_EXPR = hlc_expr(),
+        ));
+
+        sql.push_str(&format!("DROP TRIGGER IF EXISTS trg_{table}_sync_update;\n"));
+        sql.push_str(&format!(
+            "CREATE TRIGGER trg_{table}_sync_update AFTER UPDATE ON {table} \
+             WHEN NEW.sync_updated_at IS OLD.sync_updated_at BEGIN \
+             UPDATE sync_hlc_state SET \
+               last_logical = CASE WHEN {NOW_MS} <= last_physical_ms THEN last_logical + 1 ELSE 0 END, \
+               last_physical_ms = MAX({NOW_MS}, last_physical_ms) \
+             WHERE id = 1; \
+             UPDATE {table} SET \
+               sync_updated_at = datetime('now'), \
+               sync_hlc = {HLC_EXPR} \
+             WHERE rowid = NEW.rowid; \
+             END;\n",
+            NOW_MS = NOW_MS_EXPR,
+            HLC_EXPR = hlc_expr(),
+        ));
+
+        sql.push_str(&format!("DROP TRIGGER IF EXISTS trg_{table}_tombstone;\n"));
+        sql.push_str(&format!(
+            "CREATE TRIGGER trg_{table}_tombstone AFTER DELETE ON {table} BEGIN \
+             UPDATE sync_hlc_state SET \
+               last_logical = CASE WHEN {NOW_MS} <= last_physical_ms THEN last_logical + 1 ELSE 0 END, \
+               last_physical_ms = MAX({NOW_MS}, last_physical_ms) \
+             WHERE id = 1; \
+             INSERT INTO sync_tombstones (table_name, sync_id, deleted_at, hlc) \
+             VALUES ('{table}', OLD.sync_id, datetime('now'), {HLC_EXPR}) \
+             ON CONFLICT(table_name, sync_id) DO UPDATE SET \
+               deleted_at = excluded.deleted_at, hlc = excluded.hlc; \
+             END;\n",
+            NOW_MS = NOW_MS_EXPR,
+            HLC_EXPR = hlc_expr(),
+        ));
+    }
+    sql
+}
+
+/// SQLite epoch-milliseconds expression (no native `unixepoch(..., 'subsec')` in the
+/// bundled SQLCipher version here, so this is the julianday-based equivalent).
+const NOW_MS_EXPR: &str = "(CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER))";
+
+/// Reads `sync_hlc_state` (just bumped by the same trigger body, above) and this
+/// device's `device_id` (see `db::ensure_device_id`) to build one `sync_hlc` value.
+fn hlc_expr() -> String {
+    "(SELECT printf('%013d:%09d:%s', last_physical_ms, last_logical, \
+      (SELECT value FROM app_settings WHERE key = 'device_id')) \
+      FROM sync_hlc_state WHERE id = 1)"
+        .to_string()
 }
 
 #[cfg(test)]

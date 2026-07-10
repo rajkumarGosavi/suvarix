@@ -25,8 +25,16 @@ const MAGIC: &[u8; 4] = b"FFBK";
 // v1: wholesale table replace (see `apply_backup_payload_replace`) — kept for
 // reading files exported by a not-yet-updated device during a version transition.
 // v2: per-row merge keyed by `sync_id`, with FK id-remapping and tombstones (see
-// `apply_backup_payload_merge`). New exports always write v2.
-const FORMAT_VERSION: u8 = 2;
+// `apply_backup_payload_merge`).
+// v3: adds the `sync_hlc` column (rows) and `hlc` column (tombstones) — see
+// `migration_021_hlc_state_and_triggers`. Bumped because `update_row_by_id` /
+// `insert_row_new_id` build their SQL from whatever keys are present in the
+// remote JSON row, so an older binary applying a row with a `sync_hlc` key it
+// has no local column for would hit "no such column" mid-transaction instead
+// of failing cleanly — this must be caught by the version check below
+// (`decrypt_backup_bytes`) before merge ever runs. New exports always write v3.
+// Bump this again for any future change to a `SYNC_TABLES` table's columns.
+pub(crate) const FORMAT_VERSION: u8 = 3;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN; // 33
@@ -34,6 +42,26 @@ const HEADER_LEN: usize = 4 + 1 + SALT_LEN + NONCE_LEN; // 33
 /// Filename the auto-sync scheduler writes/reads inside the user's chosen
 /// sync folder (desktop) or SAF tree (Android). Shared with `backup::scheduler`.
 pub(crate) const SYNC_FILENAME: &str = "suvarix-sync.svbak";
+
+/// Set by `scheduler::run_tick` when an import hits `AppError::UnsupportedBackupVersion`
+/// (a peer device wrote a newer `.svbak` format than this app build reads) — surfaced to
+/// the frontend via `get_sync_block_status` as a persistent "update the app" banner
+/// rather than a one-off toast, since retrying next tick won't fix it on its own.
+pub(crate) const SETTING_SYNC_BLOCKED: &str = "sync_blocked_version_mismatch";
+
+/// Whether auto-sync is currently paused because a peer wrote a newer backup
+/// format than this app build understands (see `SETTING_SYNC_BLOCKED`). Local
+/// (non-sync) app usage is unaffected either way.
+#[tauri::command]
+pub fn get_sync_block_status(state: State<DbState>) -> Result<bool> {
+    let conn = state.0.get()?;
+    Ok(conn
+        .query_row("SELECT value FROM app_settings WHERE key=?1", [SETTING_SYNC_BLOCKED], |r| {
+            r.get::<_, String>(0)
+        })
+        .map(|v| v == "true")
+        .unwrap_or(false))
+}
 
 // Excludes: password_hash, password_salt (auth), *_access_token/*_token_date (session)
 const SYNC_SETTINGS_KEYS: &[&str] = &[
@@ -75,6 +103,11 @@ struct TombstoneRow {
     table_name: String,
     sync_id: String,
     deleted_at: String,
+    // Absent in v2-and-earlier payloads (from a peer that hasn't updated, or an
+    // older local export from before this device updated) — falls back to
+    // `deleted_at` string comparison at merge time, same as a row missing `sync_hlc`.
+    #[serde(default)]
+    hlc: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -147,7 +180,7 @@ fn build_backup_payload(conn: &rusqlite::Connection) -> Result<(BackupPayload, u
 
     let tombstones = {
         let mut stmt = conn
-            .prepare("SELECT table_name, sync_id, deleted_at FROM sync_tombstones")
+            .prepare("SELECT table_name, sync_id, deleted_at, hlc FROM sync_tombstones")
             .map_err(|e| AppError::Database(format!("prepare tombstones: {e}")))?;
         let rows = stmt
             .query_map([], |r| {
@@ -155,6 +188,7 @@ fn build_backup_payload(conn: &rusqlite::Connection) -> Result<(BackupPayload, u
                     table_name: r.get(0)?,
                     sync_id: r.get(1)?,
                     deleted_at: r.get(2)?,
+                    hlc: r.get(3)?,
                 })
             })
             .map_err(|e| AppError::Database(format!("dump tombstones: {e}")))?;
@@ -284,9 +318,12 @@ fn apply_backup_payload_replace(db: &DbPool, payload: &BackupPayload) -> Result<
 // `remote_id -> this_device_local_id` map built table-by-table as we go —
 // `SYNC_TABLES` orders parents before children so every FK a row can carry
 // already has a complete map by the time that row is processed. Tombstones
-// (`payload.tombstones`) are applied last, deleting local rows an
-// at-least-as-recent remote delete targets, so a row deleted on one device
-// doesn't get silently resurrected by the next union.
+// (`payload.tombstones`) are applied *first*, before any row insert/update,
+// deleting local rows an at-least-as-recent remote delete targets — both so a
+// row deleted on one device doesn't get silently resurrected by the union, and
+// so a still-live not-yet-deduped duplicate is actually gone before some other
+// row's FK remap tries to reuse the UNIQUE slot it's sitting on (see
+// `apply_backup_payload_merge`'s comment on that ordering).
 
 /// FK columns each table's rows carry, as `(column, referenced synced table,
 /// required)` — used to translate a remote device's local ids into this
@@ -365,6 +402,126 @@ fn remap_row_fks(
     true
 }
 
+/// True if side `a` should win over side `b` in a merge comparison (which one
+/// is "remote"/"local", or "row"/"tombstone", depends on the call site).
+/// Prefers comparing `sync_hlc` (millisecond resolution + device tiebreak,
+/// immune to the seconds-resolution ties `sync_updated_at` alone can hit)
+/// whenever both sides have one; falls back to the legacy `sync_updated_at`
+/// string compare when either side lacks it (a legacy row untouched since
+/// before this device's HLC upgrade, or a payload from a peer that hasn't
+/// updated yet). `or_equal` selects the tombstone-vs-row comparisons' `>=` (a
+/// delete at least as recent as the row it targets wins, so a delete is never
+/// silently lost to a concurrent no-op re-sync of the same row) vs. plain
+/// row-update's strict `>` (a tie leaves the local copy alone rather than
+/// churning it).
+fn a_wins(a_hlc: Option<&str>, a_ts: &str, b_hlc: Option<&str>, b_ts: &str, or_equal: bool) -> bool {
+    match (a_hlc, b_hlc) {
+        (Some(ah), Some(bh)) if !ah.is_empty() && !bh.is_empty() => {
+            if or_equal { ah >= bh } else { ah > bh }
+        }
+        _ => {
+            if or_equal { a_ts >= b_ts } else { a_ts > b_ts }
+        }
+    }
+}
+
+/// HLC "receive" rule: after merging in a peer's rows/tombstones, this
+/// device's own `sync_hlc_state` must be pulled forward to at least the
+/// highest HLC just observed — otherwise a local edit made shortly after this
+/// import could still stamp a lower HLC than the row it just imported (this
+/// device's system clock has no reason to already be caught up with whatever
+/// the peer's was), silently undoing the entire point of using HLC over a
+/// plain wall-clock compare the next time these two devices' edits conflict.
+/// Parses `"{physical_ms}:{logical}:{device_id}"` (see
+/// `migrations::migration_021_hlc_state_and_triggers`); malformed input (should
+/// be unreachable — only ever produced by this app's own trigger) is ignored
+/// rather than failing the whole merge over a clock nicety.
+/// `TombstoneRow.table_name` comes straight from an imported (untrusted —
+/// corrupted file, or a malicious/compromised peer with write access to the
+/// sync folder) payload and is interpolated directly into SQL as an
+/// identifier below (table names can't be bound as query parameters), rather
+/// than passed as a value. Standard practice for any dynamic SQL identifier
+/// is to validate against a known-good allow-list before it ever touches a
+/// query string, regardless of whether a specific exploit chain is provably
+/// constructible against today's exact query shapes and rusqlite's
+/// single-statement `execute`/`query_row` — the alternative is re-auditing
+/// every call site by hand every time either changes.
+fn is_valid_sync_table(table: &str) -> bool {
+    SYNC_TABLES.contains(&table)
+}
+
+const MAX_CLOCK_SKEW_MS: i64 = 24 * 60 * 60 * 1000; // 1 day
+
+/// Format + plausibility check for a `sync_hlc` from an untrusted payload
+/// (remote row or tombstone) before it's ever compared against a local value
+/// or fed into `apply_hlc_receive`. Without this, a corrupted or malicious
+/// `.svbak` could plant a `sync_hlc` with an absurd `physical_ms` (say, the
+/// year 9999) that wins every merge forever and — worse — permanently drags
+/// this device's own clock into the future via the HLC "receive" rule,
+/// poisoning every sync this device does afterward, not just the one row.
+/// Malformed or implausible input is treated as absent, i.e. falls back to
+/// the legacy `sync_updated_at` compare, exactly like a legacy peer's row
+/// that never had a `sync_hlc` at all.
+fn sanitize_hlc(hlc: Option<String>) -> Option<String> {
+    let hlc = hlc?;
+    let parts: Vec<&str> = hlc.split(':').collect();
+    let [phys_str, logical_str, device_str] = parts.as_slice() else { return None };
+    if phys_str.len() != 13 || !phys_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if logical_str.len() != 9 || !logical_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if device_str.len() != 32 || !device_str.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let physical_ms: i64 = phys_str.parse().ok()?;
+    if physical_ms > chrono::Utc::now().timestamp_millis() + MAX_CLOCK_SKEW_MS {
+        return None;
+    }
+    Some(hlc)
+}
+
+/// Loose but effective sanity check for the legacy wall-clock timestamp
+/// (`datetime('now')`-style `"YYYY-MM-DD HH:MM:SS"`, no timezone) from an
+/// untrusted payload. Same motivation as `sanitize_hlc`: a corrupted or
+/// malicious payload could otherwise set `sync_updated_at`/`deleted_at`
+/// arbitrarily far in the future to win every merge comparison forever.
+/// Anything unparseable or implausibly ahead of this device's own clock is
+/// treated as the empty string, which `a_wins`'s comparisons already handle
+/// as "never wins" (same as a row that never had this field set).
+fn sanitize_legacy_ts(ts: String) -> String {
+    let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S") else {
+        return String::new();
+    };
+    let max_allowed = chrono::Utc::now().naive_utc() + chrono::Duration::milliseconds(MAX_CLOCK_SKEW_MS);
+    if parsed > max_allowed {
+        return String::new();
+    }
+    ts
+}
+
+fn apply_hlc_receive(tx: &rusqlite::Transaction<'_>, remote_hlc: &str) -> Result<()> {
+    let mut parts = remote_hlc.splitn(3, ':');
+    let (Some(phys_str), Some(logical_str)) = (parts.next(), parts.next()) else { return Ok(()) };
+    let (Ok(remote_phys), Ok(remote_logical)) = (phys_str.parse::<i64>(), logical_str.parse::<i64>()) else {
+        return Ok(());
+    };
+    tx.execute(
+        "UPDATE sync_hlc_state SET
+            last_logical = CASE
+                WHEN ?1 > last_physical_ms THEN ?2
+                WHEN ?1 = last_physical_ms THEN MAX(last_logical, ?2)
+                ELSE last_logical
+            END,
+            last_physical_ms = MAX(last_physical_ms, ?1)
+         WHERE id = 1",
+        rusqlite::params![remote_phys, remote_logical],
+    )
+    .map_err(|e| AppError::Database(format!("apply hlc receive: {e}")))?;
+    Ok(())
+}
+
 fn random_sync_id() -> String {
     let bytes: [u8; 16] = random();
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -438,6 +595,82 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
         let mut id_maps: HashMap<&'static str, HashMap<i64, i64>> = HashMap::new();
         let mut total_rows = 0usize;
         let mut tables_touched = 0usize;
+        // Highest `sync_hlc` seen anywhere in this payload (rows or tombstones).
+        // Fixed-width zero-padded encoding means plain string `>` already gives
+        // the numerically-correct max, so no parsing needed to track it here.
+        // Applied to this device's own `sync_hlc_state` once, after the loop
+        // below, via `apply_hlc_receive` — the HLC "receive" rule: observing a
+        // peer's clock must pull this device's own clock forward too, or a
+        // local edit made shortly after this import could still stamp a lower
+        // HLC than the row it just imported, undoing the whole point of using
+        // HLC over a plain wall-clock compare.
+        let mut max_remote_hlc: Option<String> = None;
+
+        // Tombstones first, before any row insert/update: a delete on device A
+        // for a row that a *different*, still-live duplicate on this device
+        // (B) currently occupies a UNIQUE slot for (e.g. two devices' own
+        // independently-seeded copies of the same holding, each pointing at a
+        // different not-yet-deduped account) must actually be gone before an
+        // incoming FK remap tries to point another row at that same slot —
+        // otherwise the insert/update below can hit a UNIQUE constraint
+        // violation against a sibling this same payload was about to delete
+        // moments later anyway. Applying deletes up front, not last, avoids
+        // that ordering hazard; nothing here depends on `id_maps` (tombstones
+        // are matched purely by `sync_id`, no FK columns involved), so moving
+        // it earlier changes only ordering, not behavior, for every other case.
+        for t in &payload.tombstones {
+            // `t.table_name` is interpolated into SQL as an identifier below —
+            // never do that for a value from an untrusted payload without
+            // checking it against the known table set first (see
+            // `is_valid_sync_table`'s doc comment).
+            if !is_valid_sync_table(&t.table_name) {
+                continue;
+            }
+            let t_deleted_at = sanitize_legacy_ts(t.deleted_at.clone());
+            let t_hlc = sanitize_hlc(t.hlc.clone());
+
+            if let Some(th) = &t_hlc {
+                if max_remote_hlc.as_deref().map(|m| th.as_str() > m).unwrap_or(true) {
+                    max_remote_hlc = Some(th.clone());
+                }
+            }
+
+            let existing_row: Option<(i64, String, Option<String>)> = tx
+                .query_row(
+                    &format!("SELECT id, sync_updated_at, sync_hlc FROM \"{}\" WHERE sync_id = ?1", t.table_name),
+                    [&t.sync_id],
+                    |r| Ok((r.get(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default(), r.get(2)?)),
+                )
+                .ok();
+            if let Some((local_id, local_updated, local_hlc)) = existing_row {
+                if a_wins(t_hlc.as_deref(), &t_deleted_at, local_hlc.as_deref(), &local_updated, true) {
+                    tx.execute(&format!("DELETE FROM \"{}\" WHERE id = ?1", t.table_name), [local_id])
+                        .map_err(|e| AppError::Database(format!("apply tombstone: {e}")))?;
+                }
+            }
+
+            let existing_tombstone: Option<(String, Option<String>)> = tx
+                .query_row(
+                    "SELECT deleted_at, hlc FROM sync_tombstones WHERE table_name = ?1 AND sync_id = ?2",
+                    rusqlite::params![t.table_name, t.sync_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .ok();
+            let incoming_wins = match &existing_tombstone {
+                Some((ex_deleted_at, ex_hlc)) => {
+                    a_wins(t_hlc.as_deref(), &t_deleted_at, ex_hlc.as_deref(), ex_deleted_at, true)
+                }
+                None => true,
+            };
+            if incoming_wins {
+                tx.execute(
+                    "INSERT INTO sync_tombstones (table_name, sync_id, deleted_at, hlc) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(table_name, sync_id) DO UPDATE SET deleted_at = excluded.deleted_at, hlc = excluded.hlc",
+                    rusqlite::params![t.table_name, t.sync_id, t_deleted_at, t_hlc],
+                )
+                .map_err(|e| AppError::Database(format!("merge tombstone: {e}")))?;
+            }
+        }
 
         for &table in SYNC_TABLES {
             id_maps.entry(table).or_default();
@@ -457,16 +690,18 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
                 }
             }
 
-            let mut tombstoned: HashMap<String, String> = HashMap::new();
+            let mut tombstoned: HashMap<String, (String, Option<String>)> = HashMap::new();
             {
                 let mut stmt = tx
-                    .prepare("SELECT sync_id, deleted_at FROM sync_tombstones WHERE table_name = ?1")
+                    .prepare("SELECT sync_id, deleted_at, hlc FROM sync_tombstones WHERE table_name = ?1")
                     .map_err(|e| AppError::Database(e.to_string()))?;
                 let rows = stmt
-                    .query_map([table], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                    .query_map([table], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+                    })
                     .map_err(|e| AppError::Database(e.to_string()))?;
                 for row in rows.flatten() {
-                    tombstoned.insert(row.0, row.1);
+                    tombstoned.insert(row.0, (row.1, row.2));
                 }
             }
 
@@ -480,8 +715,16 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(random_sync_id);
-                let remote_updated =
-                    obj.get("sync_updated_at").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let remote_updated = sanitize_legacy_ts(
+                    obj.get("sync_updated_at").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                );
+                let remote_hlc =
+                    sanitize_hlc(obj.get("sync_hlc").and_then(|v| v.as_str()).map(str::to_string));
+                if let Some(rh) = &remote_hlc {
+                    if max_remote_hlc.as_deref().map(|m| rh.as_str() > m).unwrap_or(true) {
+                        max_remote_hlc = Some(rh.clone());
+                    }
+                }
 
                 if !remap_row_fks(table, &mut obj, &id_maps) {
                     continue; // required parent not present on this device — skip
@@ -493,7 +736,8 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
                     id_maps.get_mut(table).unwrap().insert(remote_id, local_id);
                     let local_updated =
                         local_row.get("sync_updated_at").and_then(|v| v.as_str()).unwrap_or_default();
-                    if remote_updated.as_str() > local_updated {
+                    let local_hlc = local_row.get("sync_hlc").and_then(|v| v.as_str());
+                    if a_wins(remote_hlc.as_deref(), &remote_updated, local_hlc, local_updated, false) {
                         update_row_by_id(&tx, table, local_id, &obj)?;
                         touched_this_table = true;
                         total_rows += 1;
@@ -501,8 +745,8 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
                     continue;
                 }
 
-                if let Some(deleted_at) = tombstoned.get(&sync_id) {
-                    if deleted_at.as_str() >= remote_updated.as_str() {
+                if let Some((deleted_at, tombstone_hlc)) = tombstoned.get(&sync_id) {
+                    if a_wins(tombstone_hlc.as_deref(), deleted_at, remote_hlc.as_deref(), &remote_updated, true) {
                         continue; // deleted here at least as recently — don't resurrect
                     }
                 }
@@ -519,32 +763,8 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
             }
         }
 
-        // Tombstones last: delete local rows an at-least-as-recent remote delete
-        // targets (fires this table's own tombstone trigger, upserting a local
-        // record so a future export tells other devices too), then fold the
-        // remote tombstone list into ours either way, keeping the newer
-        // `deleted_at` if we already knew about this delete.
-        for t in &payload.tombstones {
-            let existing: Option<(i64, String)> = tx
-                .query_row(
-                    &format!("SELECT id, sync_updated_at FROM \"{}\" WHERE sync_id = ?1", t.table_name),
-                    [&t.sync_id],
-                    |r| Ok((r.get(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default())),
-                )
-                .ok();
-            if let Some((local_id, local_updated)) = existing {
-                if t.deleted_at.as_str() >= local_updated.as_str() {
-                    tx.execute(&format!("DELETE FROM \"{}\" WHERE id = ?1", t.table_name), [local_id])
-                        .map_err(|e| AppError::Database(format!("apply tombstone: {e}")))?;
-                }
-            }
-            tx.execute(
-                "INSERT INTO sync_tombstones (table_name, sync_id, deleted_at) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(table_name, sync_id) DO UPDATE SET deleted_at = excluded.deleted_at
-                 WHERE excluded.deleted_at > sync_tombstones.deleted_at",
-                rusqlite::params![t.table_name, t.sync_id, t.deleted_at],
-            )
-            .map_err(|e| AppError::Database(format!("merge tombstone: {e}")))?;
+        if let Some(hlc) = &max_remote_hlc {
+            apply_hlc_receive(&tx, hlc)?;
         }
 
         for key in SYNC_SETTINGS_KEYS {
@@ -619,13 +839,19 @@ pub struct DedupeSummary {
 }
 
 /// Content fingerprint for duplicate detection — every column except the
-/// three that are expected to legitimately differ between two rows that are
-/// otherwise the same logical entity: `id` (per-device local key), `sync_id`
+/// ones expected to legitimately differ between two rows that are otherwise
+/// the same logical entity: `id` (per-device local key), `sync_id`
 /// (independently minted per device at backfill time — the whole reason this
-/// cleanup exists) and `sync_updated_at` (a merge clock, not row content).
+/// cleanup exists), and `sync_updated_at`/`sync_hlc` (merge clocks, not row
+/// content — `sync_hlc` in particular always differs between devices since it
+/// embeds `device_id`, so it must be excluded here just like the others or
+/// two devices' independently-seeded copies of the same row would never
+/// fingerprint as duplicates).
 fn fingerprint_row(obj: &serde_json::Map<String, serde_json::Value>) -> String {
-    let mut pairs: Vec<(&String, &serde_json::Value)> =
-        obj.iter().filter(|(k, _)| !matches!(k.as_str(), "id" | "sync_id" | "sync_updated_at")).collect();
+    let mut pairs: Vec<(&String, &serde_json::Value)> = obj
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "id" | "sync_id" | "sync_updated_at" | "sync_hlc"))
+        .collect();
     pairs.sort_by(|a, b| a.0.cmp(b.0));
     serde_json::to_string(&pairs).unwrap_or_default()
 }
@@ -930,8 +1156,22 @@ pub(crate) fn android_import_sync_backup(
 // picked via the save/open dialog is a content:// SAF URI, which
 // std::fs::write/read cannot open directly.
 
+/// Real filesystem paths (desktop) get an atomic write — write to a sibling
+/// `.tmp` file then `rename` over the target, so a crash/power-loss mid-write
+/// can never leave a torn file the next import fails to decrypt. `file://`/
+/// Android `content://` URIs have no equivalent atomic rename across schemes
+/// and keep the old in-place truncate+write (unchanged, known limitation).
 fn write_via_fs(app: &AppHandle, path: &str, bytes: &[u8]) -> std::io::Result<()> {
     let file_path = path.parse::<tauri_plugin_fs::FilePath>().unwrap();
+
+    if let Some(real_path) = file_path.as_path() {
+        let file_name = real_path.file_name().expect("sync backup path must have a filename");
+        let tmp_path = real_path.with_file_name(format!("{}.tmp", file_name.to_string_lossy()));
+        std::fs::write(&tmp_path, bytes)?;
+        std::fs::rename(&tmp_path, real_path)?;
+        return Ok(());
+    }
+
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     let mut file = app.fs().open(file_path, opts)?;
@@ -963,7 +1203,7 @@ fn decrypt_backup_bytes(data: &[u8], password: &str) -> Result<BackupPayload> {
     // device) alongside the current one — only reject a version newer than this
     // binary understands. `apply_backup_payload` branches on `payload.version`.
     if data[4] > FORMAT_VERSION {
-        return Err(AppError::Validation(format!("unsupported backup version {}", data[4])));
+        return Err(AppError::UnsupportedBackupVersion(data[4], FORMAT_VERSION));
     }
 
     let salt = &data[5..5 + SALT_LEN];
@@ -1212,7 +1452,10 @@ mod tests {
         let mut bytes = encrypt_backup_bytes(&minimal_payload(), SYNC_PW).unwrap();
         bytes[4] = 99;
         let err = decrypt_backup_bytes(&bytes, SYNC_PW).unwrap_err();
-        assert!(err.to_string().contains("unsupported backup version"), "got: {err}");
+        assert!(
+            matches!(err, AppError::UnsupportedBackupVersion(99, v) if v == FORMAT_VERSION),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -1437,7 +1680,12 @@ mod tests {
     }
 
     /// When both devices edited the same row (same `sync_id`) independently,
-    /// the one with the newer `sync_updated_at` must win.
+    /// the one with the newer `sync_updated_at` must win — the legacy
+    /// (pre-HLC, or peer-hasn't-upgraded) comparison path. `sync_hlc` is
+    /// stripped from A's payload here since it now takes priority whenever
+    /// both sides have one — this test is specifically about the
+    /// `sync_updated_at` fallback, covered on its own in
+    /// `merge_falls_back_to_sync_updated_at_when_remote_hlc_missing` too.
     #[test]
     fn both_sides_edited_newer_sync_updated_at_wins() {
         let (_dir_a, db_a) = test_db_pool();
@@ -1462,12 +1710,315 @@ mod tests {
             .unwrap();
         }
 
-        let payload_2 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        let mut payload_2 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        for rows in payload_2.tables.values_mut() {
+            for row in rows {
+                if let Some(obj) = row.as_object_mut() {
+                    obj.remove("sync_hlc");
+                }
+            }
+        }
         apply_backup_payload(&db_b, &payload_2).unwrap();
 
         let name: String =
             db_b.get().unwrap().query_row("SELECT name FROM accounts", [], |r| r.get(0)).unwrap();
         assert_eq!(name, "A Edited", "the strictly-newer edit must win");
+    }
+
+    // ── Hybrid Logical Clock (sync_hlc) ──
+
+    fn sync_hlc_of(db: &crate::db::DbPool, table: &str) -> Option<String> {
+        db.get()
+            .unwrap()
+            .query_row(&format!("SELECT sync_hlc FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The trigger's logical counter must advance instead of physical time
+    /// when the clock hasn't moved forward — forcing `sync_hlc_state` into the
+    /// future (as if a previous write already claimed that millisecond) proves
+    /// this deterministically, without depending on two real writes landing in
+    /// the same millisecond by chance.
+    #[test]
+    fn hlc_logical_counter_bumps_when_physical_clock_does_not_advance() {
+        let (_dir, db) = test_db_pool();
+        let conn = db.get().unwrap();
+        let future_ms = 9_999_999_999_999i64; // far past any real "now" this test will run at
+        conn.execute(
+            "UPDATE sync_hlc_state SET last_physical_ms = ?1, last_logical = 5 WHERE id = 1",
+            [future_ms],
+        )
+        .unwrap();
+
+        conn.execute("INSERT INTO accounts (name, type) VALUES ('A', 'bank')", []).unwrap();
+        let hlc_1 = sync_hlc_of(&db, "accounts").unwrap();
+        assert_eq!(hlc_1, format!("{future_ms:013}:{:09}:{}", 6, device_id_of(&db)));
+
+        conn.execute("INSERT INTO accounts (name, type) VALUES ('B', 'bank')", []).unwrap();
+        let state: (i64, i64) = conn
+            .query_row("SELECT last_physical_ms, last_logical FROM sync_hlc_state WHERE id = 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(state, (future_ms, 7), "logical counter keeps advancing while physical clock is stuck");
+    }
+
+    fn device_id_of(db: &crate::db::DbPool) -> String {
+        db.get()
+            .unwrap()
+            .query_row("SELECT value FROM app_settings WHERE key='device_id'", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn hlc_values_are_lexicographically_ordered_by_write_order() {
+        let (_dir, db) = test_db_pool();
+        let conn = db.get().unwrap();
+        conn.execute("INSERT INTO accounts (name, type) VALUES ('A', 'bank')", []).unwrap();
+        let first = sync_hlc_of(&db, "accounts").unwrap();
+        conn.execute("UPDATE accounts SET name = 'A2' WHERE name = 'A'", []).unwrap();
+        let second: String = conn.query_row("SELECT sync_hlc FROM accounts", [], |r| r.get(0)).unwrap();
+        assert!(second.as_str() > first.as_str(), "a later write's sync_hlc must sort after an earlier one");
+    }
+
+    /// The whole point of upgrading past a plain wall-clock compare: a device
+    /// whose `sync_updated_at` is forged/rolled-back (simulating clock skew or
+    /// a buggy remote export) must not win the merge if its `sync_hlc` — set by
+    /// this same device's own trigger at the time of the real edit — correctly
+    /// reflects that the edit happened earlier than usual would suggest.
+    #[test]
+    fn hlc_wins_over_forged_sync_updated_at() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+
+        let payload_1 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(&db_b, &payload_1).unwrap();
+
+        // B edits second (later real sync_hlc than A's original), but A's export
+        // below claims a `sync_updated_at` far in the future — a forged/skewed
+        // wall clock is exactly the failure mode `sync_hlc` must not fall for.
+        db_b.get().unwrap().execute("UPDATE accounts SET name = 'B Edited' WHERE name = 'Source Bank'", []).unwrap();
+
+        let payload_2 = {
+            let conn = db_a.get().unwrap();
+            conn.execute(
+                "UPDATE accounts SET sync_updated_at = datetime('now', '+10 years') WHERE name = 'Source Bank'",
+                [],
+            )
+            .unwrap();
+            build_backup_payload(&conn).unwrap().0
+        };
+        apply_backup_payload(&db_b, &payload_2).unwrap();
+
+        let name: String =
+            db_b.get().unwrap().query_row("SELECT name FROM accounts", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "B Edited", "sync_hlc must win over a forged/skewed sync_updated_at");
+    }
+
+    /// A row from a peer that hasn't upgraded yet (or a legacy row untouched
+    /// since before this device's own HLC upgrade) has no `sync_hlc` at all —
+    /// merge must fall back to the legacy `sync_updated_at` compare exactly as
+    /// it worked before, not treat the missing value as "always loses".
+    #[test]
+    fn merge_falls_back_to_sync_updated_at_when_remote_hlc_missing() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+
+        let payload_1 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(&db_b, &payload_1).unwrap();
+
+        db_b.get().unwrap().execute("UPDATE accounts SET name = 'B Edited' WHERE name = 'Source Bank'", []).unwrap();
+
+        let mut payload_2 = {
+            let conn = db_a.get().unwrap();
+            conn.execute("UPDATE accounts SET name = 'A Edited' WHERE name = 'Source Bank'", []).unwrap();
+            conn.execute(
+                "UPDATE accounts SET sync_updated_at = datetime('now', '+1 hour') WHERE name = 'A Edited'",
+                [],
+            )
+            .unwrap();
+            build_backup_payload(&conn).unwrap().0
+        };
+        // Simulate a pre-HLC-upgrade peer's export: strip `sync_hlc` from every row.
+        for rows in payload_2.tables.values_mut() {
+            for row in rows {
+                if let Some(obj) = row.as_object_mut() {
+                    obj.remove("sync_hlc");
+                }
+            }
+        }
+
+        apply_backup_payload(&db_b, &payload_2).unwrap();
+
+        let name: String =
+            db_b.get().unwrap().query_row("SELECT name FROM accounts", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "A Edited", "must fall back to sync_updated_at when remote has no sync_hlc");
+    }
+
+    /// `device_id` must never travel through a settings import — it's not in
+    /// `SYNC_SETTINGS_KEYS` (an allow-list), so even a payload that includes it
+    /// (a buggy or malicious peer) must not overwrite this device's own id.
+    #[test]
+    fn device_id_never_imported_from_peer_settings() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+        let own_device_id = device_id_of(&db_b);
+
+        let mut payload = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        payload.settings.insert("device_id".to_string(), "malicious-peer-device-id".to_string());
+
+        apply_backup_payload(&db_b, &payload).unwrap();
+
+        assert_eq!(device_id_of(&db_b), own_device_id, "device_id must never be overwritten by an import");
+    }
+
+    /// The HLC "receive" rule: after importing a peer's higher HLC, this
+    /// device's own `sync_hlc_state` must be pulled forward, or a local edit
+    /// made right after this import could still stamp a lower HLC than the row
+    /// it just imported. Uses a realistic few-hours clock-ahead skew (not an
+    /// absurd far-future value) since `sanitize_hlc` now rejects implausible
+    /// ones outright — this is testing the receive rule, not the sanitizer.
+    #[test]
+    fn merge_pulls_local_hlc_state_forward_to_match_imported_peer() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+
+        // Give A's clock a realistic head start (a few hours fast) before it exports.
+        let ahead_ms = chrono::Utc::now().timestamp_millis() + 3 * 60 * 60 * 1000;
+        db_a.get()
+            .unwrap()
+            .execute(
+                "UPDATE sync_hlc_state SET last_physical_ms = ?1, last_logical = 3 WHERE id = 1",
+                [ahead_ms],
+            )
+            .unwrap();
+        db_a.get().unwrap().execute("UPDATE accounts SET name = 'A Edited' WHERE name = 'Source Bank'", []).unwrap();
+
+        let payload = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(&db_b, &payload).unwrap();
+
+        let b_state: (i64, i64) = db_b
+            .get()
+            .unwrap()
+            .query_row("SELECT last_physical_ms, last_logical FROM sync_hlc_state WHERE id = 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert!(b_state.0 >= ahead_ms, "B's own clock must be pulled forward to at least A's");
+    }
+
+    // ── Untrusted-payload validation (corrupted file / malicious peer) ──
+
+    /// A tombstone naming a table outside `SYNC_TABLES` — whether garbage
+    /// from a corrupted file or a crafted value probing for SQL-identifier
+    /// injection — must be rejected by the allow-list before it ever reaches
+    /// a query string, and must not error out or otherwise disrupt the rest
+    /// of the import.
+    #[test]
+    fn tombstone_with_invalid_table_name_is_rejected_not_used_in_sql() {
+        let (_dir_a, db_a) = test_db_pool();
+        seed_source_db(&db_a);
+        let goals_before = row_count(&db_a, "goals");
+
+        let mut payload = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        for table_name in ["not_a_real_table", "accounts\" UNION SELECT 1,2,3 --"] {
+            payload.tombstones.push(TombstoneRow {
+                table_name: table_name.to_string(),
+                sync_id: "deadbeef00000000000000000000000".to_string(),
+                deleted_at: "2026-01-01 00:00:00".to_string(),
+                hlc: None,
+            });
+        }
+
+        apply_backup_payload(&db_a, &payload).unwrap();
+
+        assert_eq!(row_count(&db_a, "goals"), goals_before, "unrelated table must be untouched");
+    }
+
+    #[test]
+    fn sanitize_hlc_rejects_wrong_shape() {
+        assert_eq!(sanitize_hlc(None), None);
+        assert_eq!(sanitize_hlc(Some("garbage".to_string())), None);
+        assert_eq!(sanitize_hlc(Some("123:456:789".to_string())), None); // wrong widths
+        assert_eq!(
+            sanitize_hlc(Some("1234567890123:000000001:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string())),
+            None,
+            "device id must be hex"
+        );
+    }
+
+    #[test]
+    fn sanitize_hlc_rejects_implausible_future_physical_ms() {
+        // 13 nines — centuries past any real "now" this app will run at.
+        let forged = "9999999999999:000000001:00000000000000000000000000000000".to_string();
+        assert_eq!(sanitize_hlc(Some(forged)), None);
+    }
+
+    #[test]
+    fn sanitize_hlc_accepts_well_formed_current_value() {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let valid = format!("{now_ms:013}:000000001:00000000000000000000000000000000");
+        assert_eq!(sanitize_hlc(Some(valid.clone())), Some(valid));
+    }
+
+    #[test]
+    fn sanitize_legacy_ts_rejects_unparseable_and_implausible_future() {
+        assert_eq!(sanitize_legacy_ts("not-a-date".to_string()), "");
+        assert_eq!(sanitize_legacy_ts("2099-01-01 00:00:00".to_string()), "");
+    }
+
+    #[test]
+    fn sanitize_legacy_ts_accepts_ordinary_clock_drift() {
+        // A few minutes of real clock drift between devices must not be
+        // treated as suspicious — only implausible (multi-day+) jumps are.
+        let near_future = (chrono::Utc::now() + chrono::Duration::minutes(5))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        assert_eq!(sanitize_legacy_ts(near_future.clone()), near_future);
+    }
+
+    /// End-to-end: a row claiming a forged far-future `sync_hlc` must not
+    /// permanently win the merge, and must not drag this device's own HLC
+    /// clock into the future via the "receive" rule either — that would
+    /// poison every sync this device does afterward, not just this one row.
+    #[test]
+    fn forged_future_hlc_does_not_win_and_does_not_poison_local_clock() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        seed_source_db(&db_a);
+
+        let payload_1 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        apply_backup_payload(&db_b, &payload_1).unwrap();
+        db_b.get().unwrap().execute("UPDATE accounts SET name = 'B Edited' WHERE name = 'Source Bank'", []).unwrap();
+
+        let mut payload_2 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
+        for row in payload_2.tables.get_mut("accounts").unwrap() {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert(
+                    "sync_hlc".to_string(),
+                    serde_json::Value::String(
+                        "9999999999999:000000001:00000000000000000000000000000000".to_string(),
+                    ),
+                );
+            }
+        }
+
+        apply_backup_payload(&db_b, &payload_2).unwrap();
+
+        let name: String =
+            db_b.get().unwrap().query_row("SELECT name FROM accounts", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "B Edited", "forged future HLC must not win over B's real edit");
+
+        let b_physical_ms: i64 = db_b
+            .get()
+            .unwrap()
+            .query_row("SELECT last_physical_ms FROM sync_hlc_state WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert!(b_physical_ms < 9_999_999_999_999, "forged HLC must not poison this device's own clock state");
     }
 
     #[test]
@@ -1493,9 +2044,26 @@ mod tests {
     // sync in both directions — the exact sequence that doubled every
     // non-UNIQUE-constrained table on first sync.
 
+    /// Pre-existing test flakiness, unrelated to sync_hlc: `seed_source_db`
+    /// lets `created_at`/`updated_at` default to real `datetime('now')` at
+    /// insert time, which only has whole-second resolution — two back-to-back
+    /// calls (one per device) landing on opposite sides of a real second
+    /// boundary would give the "same" seeded content a different fingerprint
+    /// (`fingerprint_row` includes these two columns, correctly, since a real
+    /// independently-created duplicate legitimately can have different
+    /// business timestamps too) and `dedupe_duplicate_rows_impl` would never
+    /// recognize them as duplicates. Forcing identical values here makes the
+    /// *test fixture's* intent — "these two devices seeded the same logical
+    /// content" — deterministic, without changing `fingerprint_row` itself
+    /// (which is correctly timestamp-sensitive for real, non-simulated data).
     fn duplicate_via_first_sync(db_a: &crate::db::DbPool, db_b: &crate::db::DbPool) {
         seed_source_db(db_a);
         seed_source_db(db_b);
+        for db in [db_a, db_b] {
+            let conn = db.get().unwrap();
+            conn.execute("UPDATE accounts SET created_at = '2026-01-01 00:00:00', updated_at = '2026-01-01 00:00:00'", []).unwrap();
+            conn.execute("UPDATE equity_holdings SET created_at = '2026-01-01 00:00:00', updated_at = '2026-01-01 00:00:00'", []).unwrap();
+        }
         let payload_a = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
         apply_backup_payload(db_b, &payload_a).unwrap();
         let payload_b = { build_backup_payload(&db_b.get().unwrap()).unwrap().0 };

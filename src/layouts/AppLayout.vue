@@ -29,6 +29,18 @@ const { checkMaturity } = useMaturityCheck();
 // another device — a routine push-only tick with no diff stays silent.
 let unlistenAutoSync: UnlistenFn | null = null;
 
+// ─── Sync version-mismatch banner ──────────────────────────────
+// Persistent (not a one-off Toast, see feedback_toast_pattern) — a peer wrote
+// a newer `.svbak` format than this app build reads, so auto-sync is paused
+// until the app updates. Local (non-sync) data is unaffected either way.
+// Session-local dismiss only: reappears next launch until actually fixed.
+const syncBlocked = ref(false);
+const syncBannerDismissed = ref(false);
+
+async function checkSyncBlockStatus() {
+    syncBlocked.value = await invoke<boolean>("get_sync_block_status").catch(() => false);
+}
+
 async function lock() {
     await auth.lock();
     router.push("/unlock");
@@ -88,11 +100,13 @@ onMounted(async () => {
     track("app_opened");
     await loadLockSetting();
     checkReminders();
+    checkSyncBlockStatus();
     ACTIVITY_EVENTS.forEach(e => window.addEventListener(e, onActivity, { passive: true }));
     lockTimer = setInterval(() => {
         if (auth.checkAutoLock(autoLockMs)) {
             router.push("/unlock");
         }
+        checkSyncBlockStatus();
     }, 60_000);
     unlistenAutoSync = await listen("auto-sync-imported", () => {
         toast.add({
@@ -101,6 +115,7 @@ onMounted(async () => {
             detail: "New data was pulled in from your sync folder. Restart the app to see it.",
             life: 10000,
         });
+        checkSyncBlockStatus();
     });
 });
 
@@ -193,9 +208,16 @@ watch(route, () => { drawerOpen.value = false; });
             </div>
         </nav>
 
-        <main class="main-content">
-            <RouterView />
-        </main>
+        <div class="main-content-wrap">
+            <div v-if="syncBlocked && !syncBannerDismissed" class="sync-block-banner">
+                <i class="pi pi-exclamation-triangle" />
+                <span>A newer app version wrote your synced data — update {{ APP_NAME }} to resume auto-sync. Your local data isn't affected.</span>
+                <Button icon="pi pi-times" text size="small" @click="syncBannerDismissed = true" aria-label="Dismiss" />
+            </div>
+            <main class="main-content">
+                <RouterView />
+            </main>
+        </div>
     </div>
 
     <Toast position="bottom-right" />
@@ -295,10 +317,36 @@ watch(route, () => { drawerOpen.value = false; });
     }
 }
 
+.main-content-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
 .main-content {
     flex: 1;
     overflow-y: auto;
     padding: 1.75rem 2rem;
+}
+
+.sync-block-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 1rem;
+    background: color-mix(in srgb, var(--p-orange-400) 12%, var(--p-content-background));
+    border-bottom: 1px solid color-mix(in srgb, var(--p-orange-400) 30%, var(--p-content-background));
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+
+.sync-block-banner i {
+    color: var(--p-orange-500);
+}
+
+.sync-block-banner span {
+    flex: 1;
 }
 
 /* ── Mobile (≤639px): drawer navigation ───────────────────── */

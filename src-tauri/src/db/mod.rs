@@ -53,6 +53,7 @@ impl DbPool {
         {
             let conn = pool.get().map_err(|e| AppError::Database(e.to_string()))?;
             migrations::run_migrations(&conn)?;
+            ensure_device_id(&conn)?;
         }
         *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
         *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
@@ -87,6 +88,7 @@ impl DbPool {
             {
                 let conn = pool.get().map_err(|e| AppError::Database(e.to_string()))?;
                 migrations::run_migrations(&conn)?;
+                ensure_device_id(&conn)?;
             }
             *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
             *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
@@ -103,6 +105,7 @@ impl DbPool {
                     {
                         let conn = pool.get().map_err(|e| AppError::Database(e.to_string()))?;
                         migrations::run_migrations(&conn)?;
+                        ensure_device_id(&conn)?;
                     }
                     *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
                     *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
@@ -188,6 +191,50 @@ fn try_open(path: &Path, password: &str) -> Result<bool> {
         .is_ok())
 }
 
+/// Generates this device's persistent random id once, if not already set.
+/// Stamped into `sync_hlc` by the per-table triggers (see
+/// `migrations::migration_021_hlc_state_and_triggers`) as the tiebreak suffix
+/// when two devices' HLCs otherwise compare equal. Must never travel through a
+/// sync import — `backup::commands::SYNC_SETTINGS_KEYS` is an allow-list of the
+/// only settings keys that get exported/imported, and `device_id` is
+/// deliberately absent from it: importing a peer's payload would otherwise
+/// silently overwrite this device's own id with theirs.
+fn ensure_device_id(conn: &Connection) -> Result<()> {
+    let exists = conn
+        .query_row("SELECT 1 FROM app_settings WHERE key = 'device_id'", [], |_| Ok(()))
+        .is_ok();
+    if exists {
+        return Ok(());
+    }
+    let bytes: [u8; 16] = rand::random();
+    let device_id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    conn.execute("INSERT INTO app_settings (key, value) VALUES ('device_id', ?1)", [device_id])
+        .map_err(|e| AppError::Database(e.to_string()))?;
+    Ok(())
+}
+
+/// Unlike `ensure_device_id` (generate-once-if-missing, used on normal
+/// unlock/initialize), a restore always mints a *fresh* device_id
+/// unconditionally — called from `settings::commands::restore_database`
+/// after the DB file swap, since the restored file carries whatever
+/// device_id was live on whichever device (possibly a different physical
+/// device, possibly this same one at an earlier point) made that backup.
+/// Keeping it would risk two physically different devices sharing an HLC
+/// tiebreak identity; comparing old vs. restored first wouldn't actually
+/// catch that (neither value's history is visible from here), so this
+/// always overwrites rather than only overwriting on a detected mismatch.
+pub(crate) fn regenerate_device_id(conn: &Connection) -> Result<()> {
+    let bytes: [u8; 16] = rand::random();
+    let device_id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('device_id', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [device_id],
+    )
+    .map_err(|e| AppError::Database(e.to_string()))?;
+    Ok(())
+}
+
 fn is_plain_sqlite(path: &Path) -> bool {
     let Ok(mut f) = std::fs::File::open(path) else { return false };
     let mut magic = [0u8; 16];
@@ -216,4 +263,38 @@ fn migrate_from_device_key(path: &Path, device_key: &str, password: &str) -> Res
     drop(conn);
     std::fs::rename(&temp_path, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::test_db_pool;
+
+    #[test]
+    fn regenerate_device_id_always_overwrites() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+        let before: String =
+            conn.query_row("SELECT value FROM app_settings WHERE key='device_id'", [], |r| r.get(0)).unwrap();
+
+        regenerate_device_id(&conn).unwrap();
+
+        let after: String =
+            conn.query_row("SELECT value FROM app_settings WHERE key='device_id'", [], |r| r.get(0)).unwrap();
+        assert_ne!(before, after, "regenerate_device_id must always produce a new value");
+    }
+
+    #[test]
+    fn ensure_device_id_is_idempotent_unlike_regenerate() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+        let first: String =
+            conn.query_row("SELECT value FROM app_settings WHERE key='device_id'", [], |r| r.get(0)).unwrap();
+
+        ensure_device_id(&conn).unwrap(); // device_id already exists — must be a no-op
+
+        let second: String =
+            conn.query_row("SELECT value FROM app_settings WHERE key='device_id'", [], |r| r.get(0)).unwrap();
+        assert_eq!(first, second, "ensure_device_id must never change an existing device_id");
+    }
 }

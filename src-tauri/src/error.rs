@@ -26,6 +26,9 @@ pub enum AppError {
 
     #[error("Parse error: {0}")]
     Parse(String),
+
+    #[error("Sync file is format v{0}, this app version only reads up to v{1} — update the app to keep syncing")]
+    UnsupportedBackupVersion(u8, u8),
 }
 
 impl From<rusqlite::Error> for AppError {

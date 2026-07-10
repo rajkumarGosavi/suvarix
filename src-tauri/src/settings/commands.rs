@@ -79,8 +79,16 @@ pub fn backup_database(dest_path: String, state: State<DbState>) -> Result<()> {
 /// re-unlock — mirroring how `rekey` rebuilds the pool after changing the key.
 #[tauri::command]
 pub fn restore_database(src_path: String, state: State<DbState>) -> Result<()> {
-    let password = state.0.current_password()?;
-    let db_path = state.0.db_path().to_string();
+    restore_database_impl(&src_path, &state.0)
+}
+
+/// Shared by the `restore_database` command and its tests — `State<DbState>`
+/// can't be constructed outside a running Tauri app (see `tests/common/mod.rs`),
+/// so the real logic takes `&DbPool` directly, same split as `backup::commands`'
+/// `*_impl` functions.
+pub(crate) fn restore_database_impl(src_path: &str, db: &crate::db::DbPool) -> Result<()> {
+    let password = db.current_password()?;
+    let db_path = db.db_path().to_string();
     let temp_path = std::path::Path::new(&db_path).with_extension("db.restoretmp");
     let temp_path_str = temp_path.to_string_lossy().into_owned();
 
@@ -89,7 +97,7 @@ pub fn restore_database(src_path: String, state: State<DbState>) -> Result<()> {
     }
 
     let export_result = (|| -> Result<()> {
-        let src = rusqlite::Connection::open(&src_path)?;
+        let src = rusqlite::Connection::open(src_path)?;
         src.execute_batch(&format!("PRAGMA key = '{}';", password.replace('\'', "''")))?;
         src.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0))
             .map_err(|_| AppError::Database("backup file could not be opened with the current password".into()))?;
@@ -106,7 +114,7 @@ pub fn restore_database(src_path: String, state: State<DbState>) -> Result<()> {
     }
 
     // Drop the live pool before touching the DB file on disk.
-    state.0.lock();
+    db.lock();
 
     let swap_result = (|| -> Result<()> {
         std::fs::rename(&temp_path, &db_path)?;
@@ -120,8 +128,18 @@ pub fn restore_database(src_path: String, state: State<DbState>) -> Result<()> {
     })();
 
     // Re-unlock with the same password regardless, so the app isn't left locked.
-    state.0.unlock(&password)?;
+    db.unlock(&password)?;
+
+    // The just-restored file carries whatever device_id was live wherever it
+    // was backed up from — never reuse it (see `db::regenerate_device_id`'s
+    // doc comment for why this doesn't bother comparing old vs. restored first).
+    let regen_result = (|| -> Result<()> {
+        let conn = db.get()?;
+        crate::db::regenerate_device_id(&conn)
+    })();
+
     swap_result?;
+    regen_result?;
     Ok(())
 }
 
@@ -297,6 +315,59 @@ mod tests {
         assert_eq!(achieved, 0, "achieved-at progress must be reset, not carried over");
     }
 
+    /// `sync_hlc_state` (the HLC counter) must never go *backward* on a wipe —
+    /// resetting it to zero/small would let reseeded milestone/category rows
+    /// get an artificially low `sync_hlc` that could lose every future merge
+    /// comparison against a remote peer's already-higher counter. Note wipe's
+    /// own `DELETE`s legitimately bump the counter *forward* (each fires
+    /// `trg_<table>_tombstone`, which stamps a real HLC) — the invariant under
+    /// test is "never reset to below where it was," not "frozen in place."
+    /// See the "Wipe All Data interaction" note in the sync HLC upgrade plan.
+    #[test]
+    fn wipe_does_not_reset_sync_hlc_state() {
+        let (_dir, db) = test_db_pool();
+        let ahead_ms = chrono::Utc::now().timestamp_millis() + 3 * 60 * 60 * 1000;
+        {
+            let conn = db.get().unwrap();
+            conn.execute(
+                "UPDATE sync_hlc_state SET last_physical_ms = ?1, last_logical = 7 WHERE id = 1",
+                [ahead_ms],
+            )
+            .unwrap();
+        }
+
+        wipe_all_data_impl(&db).unwrap();
+
+        let conn = db.get().unwrap();
+        let state: (i64, i64) = conn
+            .query_row("SELECT last_physical_ms, last_logical FROM sync_hlc_state WHERE id = 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert!(state.0 >= ahead_ms, "wipe must never reset the HLC counter backward");
+
+        // Reseeded milestones must still pick up a real (non-null) sync_hlc via
+        // the insert trigger, using that same un-reset counter.
+        let milestone_hlc: Option<String> =
+            conn.query_row("SELECT sync_hlc FROM milestones LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert!(milestone_hlc.is_some(), "reseeded milestones must still get a real sync_hlc stamped");
+    }
+
+    /// `device_id` lives in `app_settings`, which wipe never touches — a wiped
+    /// device must keep its own identity (it's the same physical device).
+    #[test]
+    fn wipe_does_not_touch_device_id() {
+        let (_dir, db) = test_db_pool();
+        let before: String =
+            db.get().unwrap().query_row("SELECT value FROM app_settings WHERE key='device_id'", [], |r| r.get(0)).unwrap();
+
+        wipe_all_data_impl(&db).unwrap();
+
+        let after: String =
+            db.get().unwrap().query_row("SELECT value FROM app_settings WHERE key='device_id'", [], |r| r.get(0)).unwrap();
+        assert_eq!(before, after, "wipe must not change device_id");
+    }
+
     #[test]
     fn wipe_is_idempotent() {
         let (_dir, db) = test_db_pool();
@@ -309,5 +380,92 @@ mod tests {
         let conn = db.get().unwrap();
         assert_eq!(row_count(&conn, "categories"), 13);
         assert_eq!(row_count(&conn, "milestones"), 9);
+    }
+
+    // ── restore_database_impl ──
+
+    /// Forces `db`'s live `device_id` to a known value, then exports it into a
+    /// fresh sibling `.svbak`-unrelated backup file (same `ATTACH ... KEY ...;
+    /// sqlcipher_export(...)` pattern `backup_database` itself uses). Returns
+    /// the backup file's `TempDir` (keep it alive) and path.
+    fn make_backup_with_device_id(db: &crate::db::DbPool, device_id: &str) -> (tempfile::TempDir, String) {
+        let conn = db.get().unwrap();
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('device_id', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [device_id],
+        )
+        .unwrap();
+        let password = db.current_password().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let backup_path = dir.path().join("backup.db");
+        let backup_path_str = backup_path.to_string_lossy().into_owned();
+        conn.execute("ATTACH DATABASE ?1 AS backup_db KEY ?2", params![backup_path_str, password]).unwrap();
+        conn.query_row("SELECT sqlcipher_export('backup_db')", [], |_| Ok(())).unwrap();
+        conn.execute("DETACH DATABASE backup_db", []).unwrap();
+        (dir, backup_path_str)
+    }
+
+    fn device_id_of(db: &crate::db::DbPool) -> String {
+        db.get().unwrap().query_row("SELECT value FROM app_settings WHERE key='device_id'", [], |r| r.get(0)).unwrap()
+    }
+
+    /// The core fix: restoring must never leave this device with whatever
+    /// `device_id` the backup file happened to carry, regardless of whether
+    /// that id differs from what this device currently has.
+    #[test]
+    fn restore_never_reuses_the_backups_device_id() {
+        let (_dir, db) = test_db_pool();
+        let (_backup_dir, backup_path) = make_backup_with_device_id(&db, "backup-source-device-id");
+
+        restore_database_impl(&backup_path, &db).unwrap();
+
+        assert_ne!(
+            device_id_of(&db),
+            "backup-source-device-id",
+            "restore must never keep the backup file's own device_id"
+        );
+    }
+
+    /// Same fix, but covering the case where the backup's device_id happens to
+    /// already match what this device currently has — still must regenerate,
+    /// not treat a match as proof of safety (see `db::regenerate_device_id`'s
+    /// doc comment for why comparing first wouldn't actually help here).
+    #[test]
+    fn restore_regenerates_device_id_even_when_backup_matches_current() {
+        let (_dir, db) = test_db_pool();
+        let current = device_id_of(&db);
+        let (_backup_dir, backup_path) = make_backup_with_device_id(&db, &current);
+
+        restore_database_impl(&backup_path, &db).unwrap();
+
+        assert_ne!(
+            device_id_of(&db),
+            current,
+            "restore must regenerate even when the backup's device_id already matched current"
+        );
+    }
+
+    /// End-to-end through the real command-backing function (not a hand-rolled
+    /// copy of the ATTACH/export/swap logic, unlike the separate integration
+    /// test in tests/settings_backup_restore.rs) — data actually comes back,
+    /// and device_id is regenerated in the same operation.
+    #[test]
+    fn restore_recovers_data_and_regenerates_device_id_together() {
+        let (_dir, db) = test_db_pool();
+        db.get().unwrap().execute("INSERT INTO accounts (name, type) VALUES ('Test Savings', 'bank')", []).unwrap();
+        let (_backup_dir, backup_path) = make_backup_with_device_id(&db, "irrelevant-device-id");
+        let device_id_before_restore = device_id_of(&db);
+
+        // Simulate data loss before restoring.
+        db.get().unwrap().execute("DELETE FROM accounts", []).unwrap();
+        assert_eq!(row_count(&db.get().unwrap(), "accounts"), 0, "precondition: data gone before restore");
+
+        restore_database_impl(&backup_path, &db).unwrap();
+
+        let conn = db.get().unwrap();
+        let name: String = conn.query_row("SELECT name FROM accounts LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "Test Savings", "restore must bring the data back");
+        assert_ne!(device_id_of(&db), device_id_before_restore, "restore must still regenerate device_id");
     }
 }

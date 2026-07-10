@@ -234,6 +234,7 @@ pub fn run() {
             backup::commands::has_sync_password,
             backup::commands::sync_now,
             backup::commands::dedupe_duplicate_rows,
+            backup::commands::get_sync_block_status,
             #[cfg(target_os = "android")]
             backup::commands::pick_sync_folder_android,
             settings::commands::wipe_all_data,

@@ -12,13 +12,15 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
-use crate::backup::commands::{decrypt_sync_password, dedupe_duplicate_rows_impl};
+use crate::backup::commands::{
+    decrypt_sync_password, dedupe_duplicate_rows_impl, ImportSummary, SETTING_SYNC_BLOCKED,
+};
 #[cfg(not(target_os = "android"))]
 use crate::backup::commands::{export_sync_backup_impl, import_sync_backup_impl, SYNC_FILENAME};
 #[cfg(target_os = "android")]
 use crate::backup::commands::{android_export_sync_backup, android_import_sync_backup, android_peek_exported_at};
 use crate::db::DbPool;
-use crate::error::Result;
+use crate::error::{AppError, Result};
 
 const SETTING_ENABLED: &str = "auto_sync_enabled";
 const SETTING_FOLDER: &str = "sync_folder_path";
@@ -34,6 +36,11 @@ pub struct SyncOutcome {
     pub ran: bool,
     pub imported: bool,
     pub exported_at: Option<String>,
+    /// True when this tick's import was skipped because the remote file is a
+    /// newer backup format than this app build reads (see `SETTING_SYNC_BLOCKED`) —
+    /// the export still ran (this device's own writes are always safe to push,
+    /// see `FORMAT_VERSION`'s doc comment), just nothing was pulled in.
+    pub blocked_version_mismatch: bool,
 }
 
 /// Holds the running background task so it can be cancelled on lock/quit.
@@ -85,9 +92,19 @@ fn spawn_sync_loop(app: AppHandle, db: Arc<DbPool>) -> tauri::async_runtime::Joi
             }
 
             let interval_min = read_interval_minutes(&db).unwrap_or(DEFAULT_INTERVAL_MIN);
-            tokio::time::sleep(Duration::from_secs(interval_min.max(MIN_INTERVAL_MIN) * 60)).await;
+            tokio::time::sleep(Duration::from_secs(jittered_interval_secs(interval_min))).await;
         }
     })
+}
+
+/// Adds up to 20% random jitter to the configured interval, so two devices on
+/// the same interval don't keep landing their ticks in the same narrow window
+/// tick after tick (which would repeatedly hit the same remote-file-in-use
+/// races instead of spreading them out).
+fn jittered_interval_secs(interval_min: u64) -> u64 {
+    let base_secs = interval_min.max(MIN_INTERVAL_MIN) * 60;
+    let jitter_secs = (base_secs as f64 * rand::random::<f64>() * 0.2) as u64;
+    base_secs + jitter_secs
 }
 
 fn read_interval_minutes(db: &DbPool) -> Result<u64> {
@@ -112,6 +129,35 @@ fn set_setting(db: &DbPool, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Classifies an import outcome into `(imported_rows, blocked_version_mismatch)`.
+/// An `UnsupportedBackupVersion` error (this app build is older than whatever
+/// wrote the remote file, see `FORMAT_VERSION`'s doc comment in
+/// `backup::commands`) sets a persistent flag instead of just logging and
+/// retrying forever next tick — that failure mode won't fix itself without an
+/// app update. Any other import error (e.g. a transiently torn remote file) is
+/// logged and swallowed here rather than propagated, so it never blocks this
+/// device's own export later in the same tick (see the comment at the call site).
+fn classify_import(result: Result<ImportSummary>, db: &DbPool) -> Result<(bool, bool)> {
+    match result {
+        Ok(summary) => {
+            set_setting(db, SETTING_SYNC_BLOCKED, "false")?;
+            Ok((summary.rows_imported > 0 || summary.tables_imported > 0, false))
+        }
+        Err(AppError::UnsupportedBackupVersion(remote_v, our_v)) => {
+            tracing::warn!(
+                "auto-sync import blocked: remote backup is format v{remote_v}, \
+                 this app build only reads up to v{our_v} — update the app to resume syncing"
+            );
+            set_setting(db, SETTING_SYNC_BLOCKED, "true")?;
+            Ok((false, true))
+        }
+        Err(e) => {
+            tracing::warn!("auto-sync import failed, will retry next tick: {e}");
+            Ok((false, false))
+        }
+    }
+}
+
 /// One pull-then-push sync cycle. Shared by the background loop and the
 /// manual "Sync now" command — same logic either way, only the caller and
 /// cadence differ.
@@ -132,7 +178,12 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
     };
 
     if enabled != "true" || folder.is_empty() || password_enc.is_empty() {
-        return Ok(SyncOutcome { ran: false, imported: false, exported_at: None });
+        return Ok(SyncOutcome {
+            ran: false,
+            imported: false,
+            exported_at: None,
+            blocked_version_mismatch: false,
+        });
     }
 
     let master_password = db.current_password()?;
@@ -143,9 +194,10 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
     #[cfg(target_os = "android")]
     {
         let mut imported = false;
+        let mut blocked = false;
         if android_peek_exported_at(app, &folder, &sync_password)?.is_some() {
-            let summary = android_import_sync_backup(app, &folder, &sync_password, db)?;
-            imported = summary.rows_imported > 0 || summary.tables_imported > 0;
+            let result = android_import_sync_backup(app, &folder, &sync_password, db);
+            (imported, blocked) = classify_import(result, db)?;
         }
 
         // A merge matches incoming rows by `sync_id` only, so two devices that
@@ -160,10 +212,19 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
             dedupe_duplicate_rows_impl(db)?;
         }
 
+        // Always runs, even when the import above was blocked or failed: this
+        // device's own export is independent of whatever's wrong with the
+        // remote file, and (per `FORMAT_VERSION`'s doc comment) always writes
+        // in a format any peer — old or new — can read safely.
         let summary = android_export_sync_backup(app, &folder, &sync_password, db)?;
         set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
 
-        return Ok(SyncOutcome { ran: true, imported, exported_at: Some(summary.exported_at) });
+        return Ok(SyncOutcome {
+            ran: true,
+            imported,
+            exported_at: Some(summary.exported_at),
+            blocked_version_mismatch: blocked,
+        });
     }
 
     #[cfg(not(target_os = "android"))]
@@ -171,9 +232,10 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
         let file_path = Path::new(&folder).join(SYNC_FILENAME).to_string_lossy().into_owned();
 
         let mut imported = false;
+        let mut blocked = false;
         if Path::new(&file_path).exists() {
-            let summary = import_sync_backup_impl(app, &file_path, &sync_password, db)?;
-            imported = summary.rows_imported > 0 || summary.tables_imported > 0;
+            let result = import_sync_backup_impl(app, &file_path, &sync_password, db);
+            (imported, blocked) = classify_import(result, db)?;
         }
 
         // See the matching comment in the Android branch above: dedupe right
@@ -184,23 +246,83 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
             dedupe_duplicate_rows_impl(db)?;
         }
 
+        // Always runs — see the matching comment in the Android branch above.
         let summary = export_sync_backup_impl(app, &file_path, &sync_password, db)?;
         set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
 
-        Ok(SyncOutcome { ran: true, imported, exported_at: Some(summary.exported_at) })
+        Ok(SyncOutcome {
+            ran: true,
+            imported,
+            exported_at: Some(summary.exported_at),
+            blocked_version_mismatch: blocked,
+        })
     }
 }
 
 // ── Tests ─────────────────────────────────────────────────────
 // `run_tick`/`spawn_sync_loop` need an `AppHandle` (file IO + event emit),
 // which can't be constructed in tests — see tests/common/mod.rs. Covered
-// here: settings plumbing. The staleness/merge decision now lives per-row in
-// `backup::commands::apply_backup_payload_merge`, tested there.
+// here: settings plumbing, and `classify_import` (the part of `run_tick` that
+// decides whether an import failure blocks this device's own export — see the
+// INCIDENT_REPORT.md-flagged bug this guards against). The staleness/merge
+// decision now lives per-row in `backup::commands::apply_backup_payload_merge`,
+// tested there.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::test_db_pool;
+
+    // ── classify_import: import failures must never block this device's own export ──
+
+    #[test]
+    fn classify_import_ok_with_rows_reports_imported_and_clears_block_flag() {
+        let (_dir, db) = test_db_pool();
+        set_setting(&db, SETTING_SYNC_BLOCKED, "true").unwrap(); // simulate a previously-blocked state
+        let result = Ok(ImportSummary { rows_imported: 3, tables_imported: 1 });
+
+        let (imported, blocked) = classify_import(result, &db).unwrap();
+
+        assert!(imported);
+        assert!(!blocked);
+        let conn = db.get().unwrap();
+        assert_eq!(get_setting(&conn, SETTING_SYNC_BLOCKED).unwrap(), Some("false".to_string()));
+    }
+
+    #[test]
+    fn classify_import_ok_with_no_rows_reports_not_imported() {
+        let (_dir, db) = test_db_pool();
+        let result = Ok(ImportSummary { rows_imported: 0, tables_imported: 0 });
+        let (imported, blocked) = classify_import(result, &db).unwrap();
+        assert!(!imported);
+        assert!(!blocked);
+    }
+
+    /// The exact bug class from INCIDENT_REPORT.md's fix: a torn/corrupt remote
+    /// file must not stop this device's own export from running later in the
+    /// same tick — `classify_import` must swallow the error (log it, not
+    /// propagate), not return `Err`.
+    #[test]
+    fn classify_import_generic_error_is_swallowed_not_propagated() {
+        let (_dir, db) = test_db_pool();
+        let result: Result<ImportSummary> = Err(AppError::Validation("corrupt file".into()));
+        let (imported, blocked) = classify_import(result, &db).unwrap();
+        assert!(!imported);
+        assert!(!blocked);
+    }
+
+    #[test]
+    fn classify_import_version_mismatch_sets_block_flag_without_erroring() {
+        let (_dir, db) = test_db_pool();
+        let result: Result<ImportSummary> = Err(AppError::UnsupportedBackupVersion(4, 3));
+
+        let (imported, blocked) = classify_import(result, &db).unwrap();
+
+        assert!(!imported);
+        assert!(blocked);
+        let conn = db.get().unwrap();
+        assert_eq!(get_setting(&conn, SETTING_SYNC_BLOCKED).unwrap(), Some("true".to_string()));
+    }
 
     // ── Settings plumbing ──
 
@@ -237,5 +359,15 @@ mod tests {
         let (_dir, db) = test_db_pool();
         let conn = db.get().unwrap();
         assert_eq!(get_setting(&conn, "no-such-key").unwrap(), None);
+    }
+
+    #[test]
+    fn jittered_interval_never_goes_below_base_and_stays_within_20_percent() {
+        let base_secs = 30 * 60;
+        for _ in 0..50 {
+            let jittered = jittered_interval_secs(30);
+            assert!(jittered >= base_secs, "jitter must never shorten the interval");
+            assert!(jittered <= base_secs + base_secs / 5, "jitter must stay within +20%");
+        }
     }
 }
