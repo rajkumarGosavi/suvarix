@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 
-use crate::backup::commands::decrypt_sync_password;
+use crate::backup::commands::{decrypt_sync_password, dedupe_duplicate_rows_impl};
 #[cfg(not(target_os = "android"))]
 use crate::backup::commands::{export_sync_backup_impl, import_sync_backup_impl, SYNC_FILENAME};
 #[cfg(target_os = "android")]
@@ -148,6 +148,18 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
             imported = summary.rows_imported > 0 || summary.tables_imported > 0;
         }
 
+        // A merge matches incoming rows by `sync_id` only, so two devices that
+        // minted different `sync_id`s for the same pre-existing content (fresh
+        // install, or a device that predates the sync_id backfill) still end
+        // up with duplicate rows after this import. Cleaning up right here,
+        // every tick, catches that the moment it happens instead of relying
+        // solely on the one-time post-unlock cleanup, which can no-op on a
+        // device's very first unlock (nothing to dedupe yet) before this tick
+        // ever runs — permanently skipping the cleanup it was meant to catch.
+        if imported {
+            dedupe_duplicate_rows_impl(db)?;
+        }
+
         let summary = android_export_sync_backup(app, &folder, &sync_password, db)?;
         set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
 
@@ -162,6 +174,14 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
         if Path::new(&file_path).exists() {
             let summary = import_sync_backup_impl(app, &file_path, &sync_password, db)?;
             imported = summary.rows_imported > 0 || summary.tables_imported > 0;
+        }
+
+        // See the matching comment in the Android branch above: dedupe right
+        // after every import that actually merged rows in, not just once on
+        // unlock, so first-sync duplicates get caught the same tick they're
+        // created.
+        if imported {
+            dedupe_duplicate_rows_impl(db)?;
         }
 
         let summary = export_sync_backup_impl(app, &file_path, &sync_password, db)?;
