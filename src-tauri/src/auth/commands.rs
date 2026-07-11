@@ -20,6 +20,7 @@ pub fn setup_master_password(
     state.0.initialize(&password)?;
     scheduler.start(app.clone(), state.0.clone());
     sync_scheduler.start(app, state.0.clone());
+    tracing::debug!("first-run setup complete, schedulers started");
     Ok(())
 }
 
@@ -36,11 +37,18 @@ pub fn verify_master_password(
         // Runs before the sync scheduler starts, so a first-ever-run cleanup
         // (see `run_dedupe_once_on_unlock`) finishes before this device could
         // export any of the duplicates it's about to delete.
-        if let Err(e) = crate::backup::commands::run_dedupe_once_on_unlock(&state.0) {
-            tracing::warn!("one-time duplicate cleanup failed: {e}");
+        match crate::backup::commands::run_dedupe_once_on_unlock(&state.0) {
+            Ok(Some(summary)) => tracing::debug!(
+                rows_removed = summary.rows_removed,
+                tables_affected = summary.tables_affected,
+                "one-time duplicate cleanup ran"
+            ),
+            Ok(None) => tracing::debug!("one-time duplicate cleanup already applied, skipped"),
+            Err(e) => tracing::warn!("one-time duplicate cleanup failed: {e}"),
         }
         scheduler.start(app.clone(), state.0.clone());
         sync_scheduler.start(app, state.0.clone());
+        tracing::debug!("reminder + sync schedulers started");
     }
     Ok(ok)
 }
@@ -57,6 +65,7 @@ pub fn lock(
     scheduler.stop();
     sync_scheduler.stop();
     state.0.lock();
+    tracing::debug!("schedulers stopped, db locked");
     Ok(())
 }
 

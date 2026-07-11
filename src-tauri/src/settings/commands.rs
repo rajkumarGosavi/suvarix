@@ -59,6 +59,7 @@ pub fn set_setting(key: String, value: String, state: State<DbState>) -> Result<
 /// unlocked, see `DbPool::current_password`) as the key for the sibling file.
 #[tauri::command]
 pub fn backup_database(dest_path: String, state: State<DbState>) -> Result<()> {
+    tracing::debug!(dest_path = %dest_path, "backup_database starting");
     let conn = state.0.get()?;
     let password = state.0.current_password()?;
     if std::path::Path::new(&dest_path).exists() {
@@ -68,6 +69,7 @@ pub fn backup_database(dest_path: String, state: State<DbState>) -> Result<()> {
     let result = conn.query_row("SELECT sqlcipher_export('backup_db')", [], |_| Ok(()));
     conn.execute("DETACH DATABASE backup_db", [])?;
     result?;
+    tracing::debug!("backup_database complete");
     Ok(())
 }
 
@@ -87,6 +89,7 @@ pub fn restore_database(src_path: String, state: State<DbState>) -> Result<()> {
 /// so the real logic takes `&DbPool` directly, same split as `backup::commands`'
 /// `*_impl` functions.
 pub(crate) fn restore_database_impl(src_path: &str, db: &crate::db::DbPool) -> Result<()> {
+    tracing::debug!(src_path, "restore_database starting");
     let password = db.current_password()?;
     let db_path = db.db_path().to_string();
     let temp_path = std::path::Path::new(&db_path).with_extension("db.restoretmp");
@@ -140,10 +143,12 @@ pub(crate) fn restore_database_impl(src_path: &str, db: &crate::db::DbPool) -> R
 
     swap_result?;
     regen_result?;
+    tracing::debug!("restore_database complete, device_id regenerated");
     Ok(())
 }
 
 pub(crate) fn wipe_all_data_impl(db: &crate::db::DbPool) -> Result<()> {
+    tracing::debug!("wipe_all_data starting");
     let conn = db.get()?;
     for table in DATA_TABLES {
         conn.execute(&format!("DELETE FROM {}", table), [])
@@ -175,6 +180,7 @@ pub(crate) fn wipe_all_data_impl(db: &crate::db::DbPool) -> Result<()> {
     conn.execute("DELETE FROM sync_tombstones", [])
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+    tracing::debug!("wipe_all_data complete, categories/milestones reseeded, tombstones cleared");
     Ok(())
 }
 

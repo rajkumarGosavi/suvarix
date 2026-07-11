@@ -319,6 +319,13 @@ const autoSyncPwInput = ref("");
 const autoSyncSettingSaving = ref(false);
 const autoSyncNowLoading = ref(false);
 const lastSyncAt = ref("");
+// The `exported_at` this device actually decrypted out of the shared file on
+// its last import attempt — distinct from lastSyncAt (this device's own last
+// *export* time). If this stays behind what the other device's own "Last
+// synced" shows, this device is reading a stale/wrong copy of the file, not
+// failing to merge fresh content it already has — a direct way to tell those
+// two failure modes apart without needing device logs.
+const lastRemoteExportedAtSeen = ref("");
 
 async function loadAutoSyncSettings() {
     try { autoSyncFolder.value = await invoke<string>("get_setting", { key: "sync_folder_path" }); } catch { /* not set yet */ }
@@ -328,6 +335,7 @@ async function loadAutoSyncSettings() {
         if (AUTO_SYNC_INTERVAL_OPTIONS.some(o => o.value === v)) autoSyncInterval.value = v;
     } catch { /* not set yet */ }
     try { lastSyncAt.value = await invoke<string>("get_setting", { key: "last_sync_exported_at" }); } catch { /* not set yet */ }
+    try { lastRemoteExportedAtSeen.value = await invoke<string>("get_setting", { key: "last_remote_exported_at_seen" }); } catch { /* not set yet */ }
     try { autoSyncHasPassword.value = await invoke<boolean>("has_sync_password"); } catch { /* non-critical */ }
 }
 
@@ -401,6 +409,7 @@ async function syncNow() {
             return;
         }
         if (r.exportedAt) lastSyncAt.value = r.exportedAt;
+        try { lastRemoteExportedAtSeen.value = await invoke<string>("get_setting", { key: "last_remote_exported_at_seen" }); } catch { /* not set yet */ }
         toast.add({
             severity: "success",
             summary: "Synced",
@@ -683,6 +692,14 @@ getVersion().then(v => appVersion.value = v);
                     <div class="auto-sync-control">
                         <span class="auto-sync-path">{{ lastSyncAt ? new Date(lastSyncAt).toLocaleString("en-IN") : "Never" }}</span>
                         <Button label="Sync Now" size="small" icon="pi pi-sync" :loading="autoSyncNowLoading" @click="syncNow" />
+                    </div>
+                </div>
+                <div class="auto-sync-row">
+                    <span class="auto-sync-label" v-tooltip.top="'The data timestamp this device actually read from the shared file last time it synced — compare this against the other device\'s own \'Last synced\' above. If this is stuck behind that, this device is reading a stale copy of the file, not failing to merge data it already has.'">
+                        Last remote data seen
+                    </span>
+                    <div class="auto-sync-control">
+                        <span class="auto-sync-path">{{ lastRemoteExportedAtSeen ? new Date(lastRemoteExportedAtSeen).toLocaleString("en-IN") : "Never" }}</span>
                     </div>
                 </div>
             </div>

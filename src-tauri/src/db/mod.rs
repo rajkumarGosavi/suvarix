@@ -49,6 +49,7 @@ impl DbPool {
 
     /// First-run: create new encrypted DB with password and run migrations.
     pub fn initialize(&self, password: &str) -> Result<()> {
+        tracing::debug!(db_path = %self.db_path, "initializing new db");
         let pool = build_pool(&self.db_path, password)?;
         {
             let conn = pool.get().map_err(|e| AppError::Database(e.to_string()))?;
@@ -57,6 +58,7 @@ impl DbPool {
         }
         *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
         *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
+        tracing::debug!("db initialized");
         Ok(())
     }
 
@@ -80,6 +82,7 @@ impl DbPool {
     pub fn unlock(&self, password: &str) -> Result<bool> {
         let path = Path::new(&self.db_path);
         if !path.exists() {
+            tracing::debug!("unlock attempted but db file does not exist yet");
             return Ok(false);
         }
 
@@ -92,6 +95,7 @@ impl DbPool {
             }
             *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
             *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
+            tracing::debug!("unlocked");
             return Ok(true);
         }
 
@@ -100,6 +104,7 @@ impl DbPool {
         if let Ok(entry) = keyring::Entry::new("suvarix", "db_key") {
             if let Ok(device_key) = entry.get_password() {
                 if migrate_from_device_key(path, &device_key, password).is_ok() {
+                    tracing::debug!("migrated from legacy device-key encryption to passphrase");
                     let _ = entry.delete_credential();
                     let pool = build_pool(&self.db_path, password)?;
                     {
@@ -109,11 +114,13 @@ impl DbPool {
                     }
                     *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
                     *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
+                    tracing::debug!("unlocked");
                     return Ok(true);
                 }
             }
         }
 
+        tracing::debug!("unlock failed: wrong password");
         Ok(false)
     }
 
@@ -126,6 +133,7 @@ impl DbPool {
 
     /// Drop the connection pool (auto-lock / manual lock).
     pub fn lock(&self) {
+        tracing::debug!("locking db");
         if let Ok(mut guard) = self.inner.lock() {
             *guard = None;
         }
@@ -136,6 +144,7 @@ impl DbPool {
 
     /// Change passphrase: PRAGMA rekey on existing conn, then rebuild pool.
     pub fn rekey(&self, new_password: &str) -> Result<()> {
+        tracing::debug!("rekeying db");
         // Step 1: rekey while holding the guard (prevents new checkouts racing)
         {
             let guard = self.inner.lock().map_err(|_| AppError::Database("lock error".into()))?;
@@ -149,6 +158,7 @@ impl DbPool {
         let new_pool = build_pool(&self.db_path, new_password)?;
         *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(new_pool);
         *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(new_password.to_string());
+        tracing::debug!("rekeyed");
         Ok(())
     }
 }

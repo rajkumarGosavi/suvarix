@@ -2,6 +2,7 @@ use rusqlite::Connection;
 use crate::error::{AppError, Result};
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
+    tracing::debug!("running migrations");
     conn.execute_batch(MIGRATION_001).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_002).map_err(|e| AppError::Database(e.to_string()))?;
     conn.execute_batch(MIGRATION_003).map_err(|e| AppError::Database(e.to_string()))?;
@@ -52,6 +53,7 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // `sync_hlc` — DROP TRIGGER IF EXISTS + CREATE TRIGGER (no IF NOT EXISTS) is safe to re-run.
     conn.execute_batch(&migration_021_hlc_state_and_triggers())
         .map_err(|e| AppError::Database(e.to_string()))?;
+    tracing::debug!("migrations complete");
     Ok(())
 }
 

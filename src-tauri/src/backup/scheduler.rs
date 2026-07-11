@@ -195,7 +195,9 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
     {
         let mut imported = false;
         let mut blocked = false;
-        if android_peek_exported_at(app, &folder, &sync_password)?.is_some() {
+        let remote_peek = android_peek_exported_at(app, &folder, &sync_password)?;
+        tracing::debug!(remote_exported_at = ?remote_peek, "android tick: peeked remote file");
+        if remote_peek.is_some() {
             let result = android_import_sync_backup(app, &folder, &sync_password, db);
             (imported, blocked) = classify_import(result, db)?;
         }
@@ -218,6 +220,7 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
         // in a format any peer — old or new — can read safely.
         let summary = android_export_sync_backup(app, &folder, &sync_password, db)?;
         set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
+        tracing::debug!(imported, blocked, exported_at = %summary.exported_at, "android tick complete");
 
         return Ok(SyncOutcome {
             ran: true,
@@ -233,7 +236,9 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
 
         let mut imported = false;
         let mut blocked = false;
-        if Path::new(&file_path).exists() {
+        let remote_exists = Path::new(&file_path).exists();
+        tracing::debug!(file_path = %file_path, remote_exists, "desktop tick: checked remote file");
+        if remote_exists {
             let result = import_sync_backup_impl(app, &file_path, &sync_password, db);
             (imported, blocked) = classify_import(result, db)?;
         }
@@ -249,6 +254,7 @@ pub(crate) fn run_tick(app: &AppHandle, db: &DbPool) -> Result<SyncOutcome> {
         // Always runs — see the matching comment in the Android branch above.
         let summary = export_sync_backup_impl(app, &file_path, &sync_password, db)?;
         set_setting(db, SETTING_LAST_EXPORTED_AT, &summary.exported_at)?;
+        tracing::debug!(imported, blocked, exported_at = %summary.exported_at, "desktop tick complete");
 
         Ok(SyncOutcome {
             ran: true,

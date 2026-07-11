@@ -245,11 +245,29 @@ pub(crate) fn import_sync_backup_impl(
     apply_backup_payload(db, &payload)
 }
 
+/// `exported_at` of whatever payload this device most recently *successfully
+/// decrypted and processed* — set regardless of whether anything new actually
+/// merged in. Surfaced in Settings next to "Last synced" (which only shows
+/// this device's own last export) so a stuck sync can be diagnosed directly:
+/// if this stays behind what the other device's own "Last synced" shows,
+/// this device is reading a stale/wrong copy of the file, not failing to
+/// merge fresh content it already has.
+const SETTING_LAST_REMOTE_EXPORTED_AT_SEEN: &str = "last_remote_exported_at_seen";
+
 /// Applies an imported payload, branching on the format version it was
 /// exported with: pre-merge-support (v1) files still get the old wholesale
 /// replace (they can't be merged — the exporting device never wrote `sync_id`s
 /// or tombstones); anything else goes through the per-row merge.
 fn apply_backup_payload(db: &DbPool, payload: &BackupPayload) -> Result<ImportSummary> {
+    tracing::debug!(exported_at = %payload.exported_at, version = payload.version, "applying imported sync payload");
+    if let Ok(conn) = db.get() {
+        let _ = conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [SETTING_LAST_REMOTE_EXPORTED_AT_SEEN, &payload.exported_at],
+        );
+    }
+
     if payload.version < 2 {
         apply_backup_payload_replace(db, payload)
     } else {
@@ -465,18 +483,31 @@ const MAX_CLOCK_SKEW_MS: i64 = 24 * 60 * 60 * 1000; // 1 day
 fn sanitize_hlc(hlc: Option<String>) -> Option<String> {
     let hlc = hlc?;
     let parts: Vec<&str> = hlc.split(':').collect();
-    let [phys_str, logical_str, device_str] = parts.as_slice() else { return None };
+    let reject = |reason: &str| {
+        tracing::debug!(hlc = %hlc, reason, "rejecting sync_hlc, falling back to sync_updated_at");
+    };
+    let [phys_str, logical_str, device_str] = parts.as_slice() else {
+        reject("wrong number of ':'-separated parts");
+        return None;
+    };
     if phys_str.len() != 13 || !phys_str.bytes().all(|b| b.is_ascii_digit()) {
+        reject("physical_ms segment not 13 digits");
         return None;
     }
     if logical_str.len() != 9 || !logical_str.bytes().all(|b| b.is_ascii_digit()) {
+        reject("logical segment not 9 digits");
         return None;
     }
     if device_str.len() != 32 || !device_str.bytes().all(|b| b.is_ascii_hexdigit()) {
+        reject("device_id segment not 32 hex chars");
         return None;
     }
-    let physical_ms: i64 = phys_str.parse().ok()?;
+    let Some(physical_ms) = phys_str.parse::<i64>().ok() else {
+        reject("physical_ms segment did not parse as i64");
+        return None;
+    };
     if physical_ms > chrono::Utc::now().timestamp_millis() + MAX_CLOCK_SKEW_MS {
+        reject("physical_ms implausibly far in the future");
         return None;
     }
     Some(hlc)
@@ -492,10 +523,14 @@ fn sanitize_hlc(hlc: Option<String>) -> Option<String> {
 /// as "never wins" (same as a row that never had this field set).
 fn sanitize_legacy_ts(ts: String) -> String {
     let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(&ts, "%Y-%m-%d %H:%M:%S") else {
+        if !ts.is_empty() {
+            tracing::debug!(ts = %ts, "rejecting sync_updated_at/deleted_at, does not parse as YYYY-MM-DD HH:MM:SS");
+        }
         return String::new();
     };
     let max_allowed = chrono::Utc::now().naive_utc() + chrono::Duration::milliseconds(MAX_CLOCK_SKEW_MS);
     if parsed > max_allowed {
+        tracing::debug!(ts = %ts, "rejecting sync_updated_at/deleted_at, implausibly far in the future");
         return String::new();
     }
     ts
@@ -579,9 +614,13 @@ fn insert_row_new_id(
         Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
             if msg.contains("UNIQUE constraint failed") =>
         {
+            tracing::debug!(table, sync_id = ?row.get("sync_id"), msg = %msg, "skipping insert, UNIQUE collision with existing content");
             Ok(None)
         }
-        Err(e) => Err(AppError::Database(format!("insert into {table}: {e}"))),
+        Err(e) => {
+            tracing::warn!(table, sync_id = ?row.get("sync_id"), error = %e, "insert failed during merge");
+            Err(AppError::Database(format!("insert into {table}: {e}")))
+        }
     }
 }
 
@@ -594,7 +633,13 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
         let tx = conn.transaction()?;
         let mut id_maps: HashMap<&'static str, HashMap<i64, i64>> = HashMap::new();
         let mut total_rows = 0usize;
-        let mut tables_touched = 0usize;
+        // Tracks which tables actually changed — a `HashSet` rather than two
+        // separate counters (one bumped by tombstone deletes, one by row
+        // insert/update) so a table touched by *both* in the same merge only
+        // counts once, and so a delete-only sync (nothing inserted/updated,
+        // just a tombstone applied) still correctly reports as having
+        // imported something instead of looking identical to "nothing new."
+        let mut touched_tables: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Highest `sync_hlc` seen anywhere in this payload (rows or tombstones).
         // Fixed-width zero-padded encoding means plain string `>` already gives
         // the numerically-correct max, so no parsing needed to track it here.
@@ -646,6 +691,8 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
                 if a_wins(t_hlc.as_deref(), &t_deleted_at, local_hlc.as_deref(), &local_updated, true) {
                     tx.execute(&format!("DELETE FROM \"{}\" WHERE id = ?1", t.table_name), [local_id])
                         .map_err(|e| AppError::Database(format!("apply tombstone: {e}")))?;
+                    total_rows += 1;
+                    touched_tables.insert(t.table_name.clone());
                 }
             }
 
@@ -678,6 +725,7 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
             if remote_rows.is_empty() {
                 continue;
             }
+            tracing::debug!(table, remote_row_count = remote_rows.len(), "merging table");
 
             let local_rows = dump_table(&tx, table)?;
             let mut local_by_sync_id: HashMap<String, (i64, serde_json::Value)> = HashMap::new();
@@ -759,7 +807,7 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
             }
 
             if touched_this_table {
-                tables_touched += 1;
+                touched_tables.insert(table.to_string());
             }
         }
 
@@ -778,9 +826,13 @@ fn apply_backup_payload_merge(db: &DbPool, payload: &BackupPayload) -> Result<Im
         }
 
         tx.commit()?;
-        Ok(ImportSummary { rows_imported: total_rows, tables_imported: tables_touched })
+        tracing::debug!(total_rows, tables_touched = touched_tables.len(), "merge committed");
+        Ok(ImportSummary { rows_imported: total_rows, tables_imported: touched_tables.len() })
     })();
 
+    if let Err(e) = &result {
+        tracing::warn!(error = %e, "apply_backup_payload_merge failed, transaction rolled back");
+    }
     let _ = conn.execute_batch("PRAGMA foreign_keys = ON");
     result
 }
@@ -906,6 +958,7 @@ fn remap_fk_if_deduped(
 /// different (but now-deduped) duplicate account row are recognized as the
 /// same content instead of missed because of a stale FK.
 pub(crate) fn dedupe_duplicate_rows_impl(db: &DbPool) -> Result<DedupeSummary> {
+    tracing::debug!("dedupe_duplicate_rows starting");
     let mut conn = db.get()?;
     conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(|e| AppError::Database(e.to_string()))?;
 
@@ -984,6 +1037,7 @@ pub(crate) fn dedupe_duplicate_rows_impl(db: &DbPool) -> Result<DedupeSummary> {
         }
 
         tx.commit()?;
+        tracing::debug!(tables_affected, rows_removed, "dedupe_duplicate_rows complete");
         Ok(DedupeSummary { tables_affected, rows_removed })
     })();
 
@@ -1671,7 +1725,14 @@ mod tests {
         let payload_2 = { build_backup_payload(&db_a.get().unwrap()).unwrap().0 };
         assert!(!payload_2.tombstones.is_empty(), "delete must produce a tombstone");
 
-        apply_backup_payload(&db_b, &payload_2).unwrap();
+        let summary = apply_backup_payload(&db_b, &payload_2).unwrap();
+        assert!(
+            summary.rows_imported > 0 && summary.tables_imported > 0,
+            "a delete-only sync (nothing inserted/updated, just a tombstone applied) must still \
+             report as having imported something, not look identical to 'nothing new' — otherwise \
+             the tick's own imported/blocked bookkeeping (and the manual Sync Now toast) misreports \
+             a real, successful delete as a no-op push"
+        );
 
         let conn = db_b.get().unwrap();
         let count: i64 =

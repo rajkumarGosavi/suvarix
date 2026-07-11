@@ -68,6 +68,12 @@ fn run_check(app: &AppHandle, db: &DbPool) -> Result<()> {
     let maturities = maturity_alerts(db, MATURITY_LOOKAHEAD_DAYS)?;
     let mut notified = load_notified(db)?;
     let mut newly = Vec::new();
+    tracing::debug!(
+        reminders = reminders.len(),
+        maturities = maturities.len(),
+        already_notified = notified.len(),
+        "reminder scheduler tick"
+    );
 
     for r in &reminders {
         if r.days_until_due > BILL_LOOKAHEAD_DAYS as i64 {
@@ -102,6 +108,7 @@ fn run_check(app: &AppHandle, db: &DbPool) -> Result<()> {
     }
 
     if !newly.is_empty() {
+        tracing::debug!(count = newly.len(), "reminder scheduler firing new notifications");
         notified.extend(newly);
         if notified.len() > DEDUP_CAP {
             let excess = notified.len() - DEDUP_CAP;

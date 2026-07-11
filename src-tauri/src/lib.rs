@@ -12,6 +12,7 @@ pub mod dev_tools;
 pub mod error;
 pub mod income_expenses;
 pub mod liabilities;
+pub mod logging;
 pub mod models;
 pub mod notifications;
 pub mod portfolio;
@@ -35,6 +36,8 @@ use notifications::scheduler::SchedulerState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    logging::init();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
