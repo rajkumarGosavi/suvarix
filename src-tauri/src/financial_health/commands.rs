@@ -96,6 +96,20 @@ fn sum_query(conn: &Connection, sql: &str) -> f64 {
     conn.query_row(sql, [], |r| r.get::<_, f64>(0)).unwrap_or(0.0)
 }
 
+// Read a positive numeric app_setting, falling back to `default` if missing,
+// unparseable, or non-positive.
+fn setting_f64(conn: &Connection, key: &str, default: f64) -> f64 {
+    conn.query_row(
+        "SELECT value FROM app_settings WHERE key = ?1",
+        [key],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+    .and_then(|s| s.trim().parse::<f64>().ok())
+    .filter(|v| v.is_finite() && *v > 0.0)
+    .unwrap_or(default)
+}
+
 // Trailing-90-day income / expense. `date` is stored ISO-ish, so `date(date)` is safe.
 fn income_90(conn: &Connection) -> f64 {
     sum_query(
@@ -113,7 +127,11 @@ fn expense_90(conn: &Connection) -> f64 {
     )
 }
 
-// Liquid buffer for emergency-fund maths: positive cash balance + FDs (near-liquid).
+// Liquid buffer for emergency-fund maths: positive cash balance (savings, from the
+// net transaction ledger) + FDs (near-liquid) + liquid/overnight mutual funds.
+// Liquid-MF detection is a name heuristic — no fund-category column exists, so we
+// match scheme names containing "liquid" or "overnight" (the SEBI liquid-equivalent
+// categories). Misses oddly-named funds; over-counts a fund merely named "...liquid...".
 fn liquid_assets(conn: &Connection) -> f64 {
     let cash = sum_query(
         conn,
@@ -125,7 +143,12 @@ fn liquid_assets(conn: &Connection) -> f64 {
         conn,
         "SELECT COALESCE(SUM(COALESCE(maturity_amount, principal)),0) FROM fd_holdings",
     );
-    cash.max(0.0) + fd
+    let liquid_mf = sum_query(
+        conn,
+        "SELECT COALESCE(SUM(units * COALESCE(current_nav, avg_nav)),0) FROM mf_holdings \
+         WHERE lower(scheme_name) LIKE '%liquid%' OR lower(scheme_name) LIKE '%overnight%'",
+    );
+    cash.max(0.0) + fd + liquid_mf
 }
 
 // ─── Pillar builders ─────────────────────────────────────────────────────────
@@ -165,6 +188,7 @@ fn pillar_emergency(conn: &Connection) -> Pillar {
     let expense = expense_90(conn);
     let monthly = expense / 3.0;
     let liquid = liquid_assets(conn);
+    let target = setting_f64(conn, "emergency_fund_target_months", 6.0);
     let (score, status, top_fix) = if monthly <= 0.0 {
         (
             None,
@@ -173,12 +197,15 @@ fn pillar_emergency(conn: &Connection) -> Pillar {
         )
     } else {
         let months = liquid / monthly;
-        let s = scale(months, 0.0, 6.0); // 6 months' cover = full marks
-        let status = format!("{:.1} months of expenses in liquid savings (target 6)", months);
+        let s = scale(months, 0.0, target); // target months' cover = full marks
+        let status = format!(
+            "{:.1} months of expenses in liquid savings (target {:.0})",
+            months, target
+        );
         let fix = if s >= 100.0 {
             String::new()
         } else {
-            "Build cash/FD reserves toward 6 months of expenses".to_string()
+            format!("Build cash/FD reserves toward {:.0} months of expenses", target)
         };
         (Some(s), status, fix)
     };

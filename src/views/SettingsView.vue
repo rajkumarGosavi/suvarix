@@ -70,6 +70,32 @@ async function saveLockSetting() {
     }
 }
 
+// ─── Emergency-fund target ───────────────────────────────────
+const emergencyMonths = ref<number>(6);
+const emergencySaving = ref(false);
+
+async function loadEmergencyTarget() {
+    try {
+        const val = await invoke<string>("get_setting", { key: "emergency_fund_target_months" });
+        const n = parseInt(val, 10);
+        if (Number.isFinite(n) && n > 0) emergencyMonths.value = n;
+    } catch { /* not set yet — default 6 */ }
+}
+
+async function saveEmergencyTarget() {
+    let n = Math.round(emergencyMonths.value);
+    if (!Number.isFinite(n) || n < 1) n = 1;
+    if (n > 24) n = 24;
+    emergencyMonths.value = n;
+    emergencySaving.value = true;
+    try {
+        await invoke("set_setting", { key: "emergency_fund_target_months", value: String(n) });
+        toast.add({ severity: "success", summary: "Saved", detail: "Emergency-fund target updated. Health score will use it on next refresh.", life: 2800 });
+    } finally {
+        emergencySaving.value = false;
+    }
+}
+
 // ─── Launch at login ─────────────────────────────────────────
 const autostartEnabled = ref(false);
 const autostartLoading = ref(false);
@@ -471,6 +497,7 @@ const appDataDir = ref("");
 
 onMounted(async () => {
     await loadLockSetting();
+    await loadEmergencyTarget();
     await loadAutoSyncSettings();
     await loadDiagnostics();
     try {
@@ -571,6 +598,28 @@ getVersion().then(v => appVersion.value = v);
                         <i :class="option.icon" style="margin-right:0.4rem" />{{ option.label }}
                     </template>
                 </SelectButton>
+            </div>
+        </div>
+
+        <!-- Financial Health -->
+        <div class="section-card">
+            <h2>Financial Health</h2>
+            <div class="lock-row">
+                <div class="data-row-info">
+                    <span class="data-row-title">Emergency-fund target</span>
+                    <span class="data-row-desc">Months of expenses to treat as a full emergency fund. Reaching this scores the Emergency Fund pillar 100/100 and earns the Safety Net badge. Advisors usually suggest 3–6.</span>
+                </div>
+                <div class="lock-control">
+                    <InputNumber
+                        v-model="emergencyMonths"
+                        :min="1"
+                        :max="24"
+                        showButtons
+                        suffix=" months"
+                        style="width:150px"
+                    />
+                    <Button label="Save" size="small" :loading="emergencySaving" @click="saveEmergencyTarget" />
+                </div>
             </div>
         </div>
 

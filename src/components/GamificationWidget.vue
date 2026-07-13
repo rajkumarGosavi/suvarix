@@ -61,6 +61,7 @@ const levelSeverity = computed(() => {
                         severity="secondary"
                         :value="`${badge.icon} ${badge.name}`"
                         class="gw-badge-chip"
+                        v-tooltip.top="badge.description"
                     />
                 </div>
             </div>
