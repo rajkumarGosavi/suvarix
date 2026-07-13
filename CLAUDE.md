@@ -80,7 +80,8 @@ Modules map 1:1 to domains:
 | `backup` | Encrypted `.svbak` sync snapshots (AES-256-GCM, PBKDF2 key, separate sync password): manual export/import commands + `scheduler.rs` auto-sync loop (pull-if-remote-newer via `exported_at` last-write-wins, then push; start/stop on unlock/lock/quit like reminder scheduler) |
 | `dev_tools` | Dummy-data seeding for dev builds |
 | `analytics` | Local-only event/error/perf logging |
-| `gamification` | XP system, badges, streaks — gated behind `#[cfg(feature = "gamification")]` |
+| `financial_health` | 6-pillar 0-100 Financial Health Score (core, not feature-gated); daily score history (MIGRATION_022) + improvement-only XP snapshot |
+| `gamification` | XP system, badges, streaks — gated behind `#[cfg(feature = "gamification")]`. Health badges seeded in MIGRATION_023 (also gated) |
 | `models` | Shared serde structs |
 | `error` | `AppError` via `thiserror` |
 

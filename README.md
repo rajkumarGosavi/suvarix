@@ -59,9 +59,25 @@ Collapse the sidebar with the **×** button at the top for more screen space.
 
 Shows a live snapshot of:
 - **Net Worth** = Total Assets − Total Liabilities
+- **Financial Health Score** — a single 0–100 gauge of your money situation (see below)
 - **Asset allocation** — donut chart by category (equity, MF, FD, gold, etc.)
 - **Monthly income vs. expenses** bar chart
 - **Market indices** — Nifty 50, Sensex, Bank Nifty (refreshed on demand)
+
+### Financial Health Score
+
+A 0–100 score (graded A+ / A / B / C / D) built from six behaviour-first pillars, scored against Indian personal-finance rules of thumb:
+
+| Pillar | Weight | What it measures |
+|---|---|---|
+| Savings Rate | 20% | Share of income saved over the last 3 months (target 20%+) |
+| Emergency Fund | 20% | Months of expenses covered by liquid savings + FDs (target 6) |
+| Debt Burden | 20% | EMIs as a share of income + credit-card utilisation |
+| Diversification | 15% | Breadth of asset classes + no single class over ~40% |
+| Protection | 10% | Life and health insurance in place |
+| Net-Worth Trend | 15% | Positive and rising net worth over time |
+
+Pillars with no data yet (e.g. no income logged) are skipped so the score isn't unfairly lowered. Each pillar shows a plain-language status and the single highest-leverage next step ("Do this next"), with the points it could add. The score is tracked daily so you can watch it improve.
 
 ---
 

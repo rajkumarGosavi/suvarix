@@ -6,6 +6,7 @@ import { useChartColors } from "@/composables/useChartColors";
 import { useMilestoneCheck } from "@/composables/useMilestoneCheck";
 import { useGoalCheck } from "@/composables/useGoalCheck";
 import { useGamificationStore } from "@/stores/gamification";
+import { useHealthCheck } from "@/composables/useHealthCheck";
 import { Doughnut } from "vue-chartjs";
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from "chart.js";
 
@@ -19,6 +20,7 @@ const { textColor, PALETTE } = useChartColors();
 const { checkMilestones } = useMilestoneCheck();
 const { checkGoals } = useGoalCheck();
 const gamification = useGamificationStore();
+const { runHealthCheck } = useHealthCheck();
 
 onMounted(async () => {
     await portfolio.fetchAll();
@@ -29,6 +31,8 @@ onMounted(async () => {
     if (isGamified) {
         await gamification.fetch();
     }
+    // Financial Health Score (core — score always computes; XP/badges only if gamified).
+    await runHealthCheck();
 });
 
 const chartData = computed(() => ({
@@ -91,6 +95,8 @@ const chartOptions = computed(() => ({
                     </div>
                 </div>
             </div>
+
+            <FinancialHealthCard />
 
             <GamificationWidget v-if="isGamified" />
 

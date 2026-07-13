@@ -71,6 +71,16 @@ pub struct BadgeContext {
     pub check_debt_destroyer: bool,
     #[serde(default)]
     pub check_crore_club: bool,
+    // Financial-health milestones — the frontend sets these true only when the
+    // computed score / pillars actually cross the threshold (award-if-not-earned).
+    #[serde(default)]
+    pub check_health_a: bool,
+    #[serde(default)]
+    pub check_health_aplus: bool,
+    #[serde(default)]
+    pub check_emergency_ready: bool,
+    #[serde(default)]
+    pub check_debt_light: bool,
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -496,6 +506,30 @@ pub fn check_and_award_badges(context: BadgeContext, state: State<DbState>) -> R
 
     if context.check_crore_club {
         if let Ok(Some(b)) = award_badge_if_new(&conn, "crore_club") {
+            earned.push(b);
+        }
+    }
+
+    if context.check_health_a {
+        if let Ok(Some(b)) = award_badge_if_new(&conn, "health_a") {
+            earned.push(b);
+        }
+    }
+
+    if context.check_health_aplus {
+        if let Ok(Some(b)) = award_badge_if_new(&conn, "health_aplus") {
+            earned.push(b);
+        }
+    }
+
+    if context.check_emergency_ready {
+        if let Ok(Some(b)) = award_badge_if_new(&conn, "emergency_ready") {
+            earned.push(b);
+        }
+    }
+
+    if context.check_debt_light {
+        if let Ok(Some(b)) = award_badge_if_new(&conn, "debt_light") {
             earned.push(b);
         }
     }

@@ -46,6 +46,9 @@ test-unit:
 test:
 	OPENSSL_SRC_PERL=$(OPENSSL_SRC_PERL) cargo test --manifest-path src-tauri/Cargo.toml
 
+test-gami: 	
+	OPENSSL_SRC_PERL=$(OPENSSL_SRC_PERL) cargo test --manifest-path src-tauri/Cargo.toml --features gamification financial_health
+
 # Property-based sync merge tests (proptest) — off by default (see Cargo.toml's
 # property-tests feature) since each case spins up real temp-file SQLCipher DBs;
 # slower than the rest of the suite, run on demand rather than every `make test`.

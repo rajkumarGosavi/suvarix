@@ -53,9 +53,36 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // `sync_hlc` — DROP TRIGGER IF EXISTS + CREATE TRIGGER (no IF NOT EXISTS) is safe to re-run.
     conn.execute_batch(&migration_021_hlc_state_and_triggers())
         .map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_022: financial-health score history — CREATE TABLE IF NOT EXISTS, idempotent.
+    conn.execute_batch(MIGRATION_022).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_023: financial-health badges — only when gamification is compiled in
+    // (the `badges` table itself only exists under that feature). INSERT OR IGNORE, idempotent.
+    #[cfg(feature = "gamification")]
+    conn.execute_batch(MIGRATION_023).map_err(|e| AppError::Database(e.to_string()))?;
     tracing::debug!("migrations complete");
     Ok(())
 }
+
+// Daily record of the computed Financial Health Score, so the app can show a trend
+// and award improvement-only XP by comparing today against the last recorded day.
+const MIGRATION_022: &str = "
+CREATE TABLE IF NOT EXISTS health_score_history (
+    snapshot_date TEXT PRIMARY KEY,
+    score         REAL NOT NULL,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+";
+
+// Health-milestone badges. Awarded from the frontend health-check when thresholds
+// are crossed (see gamification::check_and_award_badges health flags).
+#[cfg(feature = "gamification")]
+const MIGRATION_023: &str = "
+INSERT OR IGNORE INTO badges (id, name, description, icon, xp_reward) VALUES
+    ('health_a',        'Financially Fit',   'Reached a grade-A financial health score',   '🩺', 30),
+    ('health_aplus',    'Peak Health',       'Reached a grade-A+ financial health score',  '🏆', 50),
+    ('emergency_ready', 'Safety Net',        'Built 6 months of emergency-fund cover',     '🛟', 30),
+    ('debt_light',      'Debt Light',        'Kept EMIs under 20% of income',              '🪶', 30);
+";
 
 /// Tables that participate in cross-device sync (see `backup::commands`). Single
 /// source of truth for both the sync-column migration below and the merge logic

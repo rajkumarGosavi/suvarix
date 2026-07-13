@@ -10,6 +10,10 @@ export interface BadgeCheckContext {
     checkDiversification?: boolean;
     checkDebtDestroyer?: boolean;
     checkCroreClub?: boolean;
+    checkHealthA?: boolean;
+    checkHealthAplus?: boolean;
+    checkEmergencyReady?: boolean;
+    checkDebtLight?: boolean;
 }
 
 const NOOP = async () => {};
@@ -102,6 +106,10 @@ export function useGamification() {
                     checkDiversification: context.checkDiversification ?? false,
                     checkDebtDestroyer: context.checkDebtDestroyer ?? false,
                     checkCroreClub: context.checkCroreClub ?? false,
+                    checkHealthA: context.checkHealthA ?? false,
+                    checkHealthAplus: context.checkHealthAplus ?? false,
+                    checkEmergencyReady: context.checkEmergencyReady ?? false,
+                    checkDebtLight: context.checkDebtLight ?? false,
                 },
             });
             await store.fetch();

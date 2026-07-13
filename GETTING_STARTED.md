@@ -75,6 +75,8 @@ pnpm tauri build -- --features gamification
 
 Without `--features gamification`, `MIGRATION_014` (gamification tables) is skipped and all gamification commands are compiled out.
 
+The **Financial Health Score** (`financial_health` module, `FinancialHealthCard.vue`) is **core** — it computes and renders with gamification off. Only its rewards are gated: improvement-only XP and the health badges (`MIGRATION_023`) need `--features gamification`. Its score history table (`MIGRATION_022`) is unconditional.
+
 ---
 
 ## Commands Reference
