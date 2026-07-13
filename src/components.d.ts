@@ -35,6 +35,7 @@ declare module 'vue' {
     Logo: typeof import('./components/Logo.vue')['default']
     Message: typeof import('primevue/message')['default']
     MfPanel: typeof import('./components/portfolio/MfPanel.vue')['default']
+    Paginator: typeof import('primevue/paginator')['default']
     Password: typeof import('primevue/password')['default']
     PpfEpfPanel: typeof import('./components/portfolio/PpfEpfPanel.vue')['default']
     ProgressBar: typeof import('primevue/progressbar')['default']

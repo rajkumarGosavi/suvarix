@@ -149,8 +149,26 @@ function onSort(event: { sortField?: string | ((item: any) => string); sortOrder
     fetchPage(0);
 }
 
+// Mobile card-view sort: pick field, or toggle direction if same field re-picked
+function setSort(field: "date" | "amount") {
+    if (sortField.value === field) {
+        sortOrder.value = sortOrder.value === 1 ? -1 : 1;
+    } else {
+        sortField.value = field;
+        sortOrder.value = -1;
+    }
+    fetchPage(0);
+}
+
 function isCredit(type: string) {
     return ["income","dividend","interest","sell","redemption","deposit"].includes(type);
+}
+
+// Amount color for mobile cards: green credit, red for spend-type debits, neutral otherwise
+function amountClass(type: string) {
+    if (isCredit(type)) return "amt-credit";
+    if (["expense","emi","withdrawal"].includes(type)) return "amt-debit";
+    return "amt-neutral";
 }
 
 function formatDateTime(s: string) {
@@ -222,6 +240,7 @@ onMounted(() => {
 
         <DataTable
             v-else
+            class="desktop-table"
             :value="store.transactions"
             stripedRows
             paginator
@@ -265,6 +284,64 @@ onMounted(() => {
                 </template>
             </Column>
         </DataTable>
+
+        <!-- Mobile card list (shown ≤639px, hides DataTable) -->
+        <div v-if="!store.isLoading" class="mobile-cards">
+            <div v-if="store.transactions.length" class="mobile-sort-bar">
+                <span class="mobile-sort-label">Sort</span>
+                <Button
+                    :label="'Date'"
+                    :icon="sortField === 'date' ? (sortOrder === 1 ? 'pi pi-sort-amount-up' : 'pi pi-sort-amount-down') : undefined"
+                    iconPos="right"
+                    size="small"
+                    :outlined="sortField !== 'date'"
+                    @click="setSort('date')"
+                />
+                <Button
+                    :label="'Amount'"
+                    :icon="sortField === 'amount' ? (sortOrder === 1 ? 'pi pi-sort-amount-up' : 'pi pi-sort-amount-down') : undefined"
+                    iconPos="right"
+                    size="small"
+                    :outlined="sortField !== 'amount'"
+                    @click="setSort('amount')"
+                />
+            </div>
+            <p v-if="!store.transactions.length" class="empty-msg">
+                No transactions yet. Tap Add to record one.
+            </p>
+            <div v-for="tx in store.transactions" :key="tx.id" class="txn-card">
+                <div class="txn-card-top">
+                    <div class="txn-card-info">
+                        <div class="txn-card-tags">
+                            <Tag :value="tx.type" />
+                            <Tag v-if="tx.tag" :value="tx.tag" severity="secondary" />
+                        </div>
+                        <div class="txn-card-meta">
+                            <span v-if="tx.category">{{ tx.category }}</span>
+                            <span v-if="tx.category" class="dot">·</span>
+                            <span>{{ formatDateTime(tx.date) }}</span>
+                        </div>
+                        <div v-if="tx.description" class="txn-card-desc" :title="tx.description">
+                            {{ tx.description }}
+                        </div>
+                    </div>
+                    <div class="txn-card-amount" :class="amountClass(tx.type)">
+                        {{ isCredit(tx.type) ? "+" : "−" }}{{ formatINR(Math.abs(tx.amount)) }}
+                    </div>
+                </div>
+                <div class="txn-card-actions">
+                    <Button icon="pi pi-pencil" text size="small" aria-label="Edit transaction" @click="openEdit(tx)" />
+                    <Button icon="pi pi-trash" text size="small" severity="danger" aria-label="Delete transaction" @click="confirmDelete(tx)" />
+                </div>
+            </div>
+            <Paginator
+                v-if="store.totalCount > PAGE_SIZE"
+                :rows="PAGE_SIZE"
+                :totalRecords="store.totalCount"
+                :first="currentOffset"
+                @page="onPage"
+            />
+        </div>
     </div>
 
     <Dialog v-model:visible="showDialog" :header="editItem ? 'Edit Transaction' : 'Add Transaction'" modal style="width:520px">
@@ -337,9 +414,29 @@ onMounted(() => {
 label { font-size: 0.85rem; font-weight: 500; }
 .dialog-footer { display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 0.5rem; }
 
+/* Mobile card list — hidden on desktop, replaces DataTable ≤639px */
+.mobile-cards { display: none; }
+.empty-msg { color: var(--p-text-muted-color); font-size: 0.9rem; padding: 2rem 0; text-align: center; }
+.mobile-sort-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+.mobile-sort-label { font-size: 0.8rem; color: var(--p-text-muted-color); }
+.txn-card { background: var(--p-content-background); border: 1px solid var(--p-content-border-color); border-radius: 12px; padding: 0.75rem 0.9rem; margin-bottom: 0.6rem; }
+.txn-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.6rem; }
+.txn-card-info { min-width: 0; }
+.txn-card-tags { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
+.txn-card-meta { font-size: 0.8rem; color: var(--p-text-muted-color); display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.txn-card-meta .dot { opacity: 0.6; }
+.txn-card-desc { font-size: 0.85rem; color: var(--p-text-color); margin-top: 0.2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+.txn-card-amount { font-size: 1.05rem; font-weight: 600; white-space: nowrap; }
+.txn-card-amount.amt-credit { color: var(--p-green-600); }
+.txn-card-amount.amt-debit { color: var(--p-red-500); }
+.txn-card-amount.amt-neutral { color: var(--p-text-color); }
+.txn-card-actions { display: flex; justify-content: flex-end; gap: 0.25rem; margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px solid var(--p-content-border-color); }
+
 @media (max-width: 639px) {
     .filter-bar { flex-direction: column; align-items: stretch; }
     .filter-input { min-width: unset; }
     .field-row { flex-direction: column; }
+    .desktop-table { display: none; }
+    .mobile-cards { display: block; }
 }
 </style>
