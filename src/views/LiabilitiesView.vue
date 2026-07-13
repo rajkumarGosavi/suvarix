@@ -451,7 +451,7 @@ onMounted(() => store.fetchAll());
 </template>
 
 <style scoped>
-.liabilities-view { max-width: 1000px; }
+.liabilities-view { max-width: 1440px; }
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0 0 1.5rem; }
 .section-header { display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0 0.75rem; }
 .section-header:first-of-type { margin-top: 0; }

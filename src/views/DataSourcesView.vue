@@ -8,6 +8,8 @@ import { useZerodhaStore } from "@/stores/zerodha";
 import { useUpstoxStore } from "@/stores/upstox";
 import { useAngelOneStore } from "@/stores/angel_one";
 import { parseCasPdf, mergeCasHoldings, type CasMfHolding } from "@/utils/casMfParser";
+import { parseBankStatement, type BankId, type BankTxnRow } from "@/utils/bankStatementParser";
+import { useCategoriesStore } from "@/stores/categories";
 import { useAnalytics } from "@/composables/useAnalytics";
 import { useToast } from "primevue/usetoast";
 
@@ -15,6 +17,7 @@ const store = usePricesStore();
 const zerodha = useZerodhaStore();
 const upstox = useUpstoxStore();
 const angelOne = useAngelOneStore();
+const categoriesStore = useCategoriesStore();
 const { track } = useAnalytics();
 const toast = useToast();
 const { formatINR } = useCurrencyFormat();
@@ -432,8 +435,96 @@ onMounted(async () => {
     zerodha.fetchStatus();
     upstox.fetchStatus();
     angelOne.fetchStatus();
+    categoriesStore.fetchCategories();
     try { isDevBuild.value = await invoke<boolean>("is_dev_build"); } catch { /* non-critical */ }
 });
+
+// ── Bank statement import (HDFC / ICICI, XLSX + CSV) ─────────────
+const bankOpen = ref(false);
+const bankStep = ref(1);
+const bankId = ref<BankId>('hdfc');
+const bankRows = ref<BankTxnRow[]>([]);
+const bankRawGrid = ref<string[][]>([]);
+const bankImporting = ref(false);
+const bankImportResult = ref<ImportResult | null>(null);
+const bankError = ref<string | null>(null);
+
+const bankCategoryOptions = computed(() => categoriesStore.names);
+const bankIncludedCount = computed(() => bankRows.value.filter(r => r.include).length);
+
+function bankReset() {
+    bankStep.value = 1;
+    bankId.value = 'hdfc';
+    bankRows.value = [];
+    bankRawGrid.value = [];
+    bankImportResult.value = null;
+    bankError.value = null;
+}
+
+async function onBankFile(event: any) {
+    const file: File = event.files?.[0];
+    if (!file) return;
+    bankError.value = null;
+    bankRows.value = [];
+    bankRawGrid.value = [];
+    try {
+        const buffer = await file.arrayBuffer();
+        const { rows, rawGrid, headerRowIndex } = parseBankStatement(bankId.value, file.name, buffer);
+        if (headerRowIndex < 0 || rows.length === 0) {
+            bankRawGrid.value = rawGrid;
+            bankError.value = headerRowIndex < 0
+                ? "Couldn't find the transaction header row. Check that this is a raw HDFC/ICICI statement export."
+                : "No transaction rows found after the header. The layout may be unsupported.";
+            return;
+        }
+        bankRows.value = rows;
+        bankStep.value = 2;
+    } catch (err: any) {
+        bankError.value = `Parse error: ${err?.message ?? err}`;
+    }
+}
+
+const bankPreviewRows = computed(() =>
+    bankRows.value.map((r, i) => ({
+        index: i,
+        date: r.date,
+        type: r.type,
+        amount: formatINR(Math.abs(r.amount)),
+        narration: r.narration || '—',
+        refNo: r.refNo || '—',
+    })),
+);
+
+async function importBankStatement() {
+    const selected = bankRows.value.filter(r => r.include);
+    if (selected.length === 0) {
+        bankError.value = "No rows selected to import.";
+        return;
+    }
+    bankImporting.value = true;
+    bankError.value = null;
+    try {
+        const result = await invoke<ImportResult>('import_bank_statement', {
+            source: `bank_${bankId.value}`,
+            rows: selected.map(r => ({
+                date: `${r.date} 00:00:00`,
+                amount: Math.abs(r.amount),
+                txnType: r.type,
+                category: r.category || null,
+                description: r.narration || null,
+                refNo: r.refNo ?? null,
+                tag: r.tag,
+            })),
+        });
+        bankImportResult.value = result;
+        bankStep.value = 3;
+        track('bank_statement_import', { bank: bankId.value, imported: result.imported, skipped: result.skipped });
+    } catch (e: any) {
+        bankError.value = String(e?.message ?? e);
+    } finally {
+        bankImporting.value = false;
+    }
+}
 
 // ── CAS import state ────────────────────────────────────────────
 const casOpen = ref(false);
@@ -1074,13 +1165,18 @@ function formatTime(iso: string | null): string {
                     @click="txnCsvOpen = true"
                 />
             </div>
-            <div class="import-card">
-                <i class="pi pi-file-pdf import-icon" />
-                <span class="import-title">Bank Statement (PDF)</span>
+            <div class="import-card import-card--active">
+                <i class="pi pi-building-columns import-icon" />
+                <span class="import-title">Bank Statement</span>
                 <span class="import-desc">
-                    Auto-parse statements from HDFC, SBI, ICICI, and Axis Bank.
+                    Import transactions from an HDFC or ICICI account statement (Excel or CSV). PDF coming soon.
                 </span>
-                <Tag value="Coming Soon" />
+                <Button
+                    label="Import Statement"
+                    icon="pi pi-upload"
+                    size="small"
+                    @click="bankOpen = true"
+                />
             </div>
             <!-- MF Central CAS — active -->
             <div class="import-card import-card--active">
@@ -1560,12 +1656,126 @@ function formatTime(iso: string | null): string {
             </template>
         </Dialog>
 
+        <!-- Bank Statement Import dialog (HDFC / ICICI) -->
+        <Dialog
+            v-model:visible="bankOpen"
+            header="Import Bank Statement"
+            :modal="true"
+            :style="{ width: '820px', maxWidth: '95vw' }"
+            @hide="bankReset"
+        >
+            <!-- Step 1: bank + file -->
+            <template v-if="bankStep === 1">
+                <p class="cas-hint">
+                    Pick your bank and upload its account statement (<strong>.xlsx</strong> or
+                    <strong>.csv</strong>) exactly as downloaded from net banking — the header and
+                    account preamble are skipped automatically.
+                </p>
+                <div class="cas-form">
+                    <div class="field">
+                        <label>Bank</label>
+                        <Select
+                            v-model="bankId"
+                            :options="[{ label: 'HDFC Bank', value: 'hdfc' }, { label: 'ICICI Bank', value: 'icici' }]"
+                            optionLabel="label"
+                            optionValue="value"
+                            class="w-full"
+                        />
+                    </div>
+                </div>
+                <div class="bank-upload">
+                    <FileUpload
+                        mode="basic"
+                        accept=".xlsx,.csv,.txt"
+                        customUpload
+                        auto
+                        chooseLabel="Choose statement file"
+                        @uploader="onBankFile"
+                    />
+                </div>
+                <Message v-if="bankError" severity="error" class="mt-msg">{{ bankError }}</Message>
+                <div v-if="bankRawGrid.length" class="bank-rawgrid">
+                    <p class="text-muted">First rows read from the file (for troubleshooting):</p>
+                    <pre>{{ bankRawGrid.map(r => r.join(' | ')).join('\n') }}</pre>
+                </div>
+            </template>
+
+            <!-- Step 2: preview + per-row exclude -->
+            <template v-else-if="bankStep === 2">
+                <p class="cas-hint">
+                    {{ bankIncludedCount }} of {{ bankRows.length }} rows selected. Untick self-transfers
+                    (credit-card payments, investment moves) so they don't pollute your reports, and edit
+                    any category before importing. Debits import as expenses, credits as income.
+                </p>
+                <DataTable :value="bankPreviewRows" size="small" scrollable scrollHeight="360px" class="cas-table">
+                    <Column header="" style="width: 44px">
+                        <template #body="{ data }">
+                            <Checkbox v-model="bankRows[data.index].include" :binary="true" />
+                        </template>
+                    </Column>
+                    <Column field="date" header="Date" style="min-width: 110px" />
+                    <Column field="type" header="Type" style="min-width: 84px" />
+                    <Column field="amount" header="Amount" style="min-width: 110px" />
+                    <Column field="narration" header="Narration" style="min-width: 200px" />
+                    <Column header="Category" style="min-width: 150px">
+                        <template #body="{ data }">
+                            <Select
+                                v-model="bankRows[data.index].category"
+                                :options="bankCategoryOptions"
+                                editable
+                                class="w-full"
+                            />
+                        </template>
+                    </Column>
+                    <Column field="refNo" header="Ref No." style="min-width: 120px" />
+                </DataTable>
+                <Message v-if="bankError" severity="error" class="mt-msg">{{ bankError }}</Message>
+                <div class="cas-confirm-btns">
+                    <Button label="Back" icon="pi pi-arrow-left" text @click="bankStep = 1" />
+                    <Button
+                        :label="`Import ${bankIncludedCount} rows`"
+                        icon="pi pi-check"
+                        :loading="bankImporting"
+                        :disabled="bankIncludedCount === 0"
+                        @click="importBankStatement"
+                    />
+                </div>
+            </template>
+
+            <!-- Step 3: done -->
+            <template v-else-if="bankStep === 3">
+                <div class="cas-done">
+                    <i class="pi pi-check-circle cas-done-icon" />
+                    <p>
+                        <strong>{{ bankImportResult?.imported }}</strong> transactions imported
+                        <span v-if="bankImportResult?.skipped">
+                            ({{ bankImportResult.skipped }} skipped — duplicates or invalid rows)
+                        </span>
+                    </p>
+                    <p class="text-muted">
+                        Tagged <strong>{{ bankId.toUpperCase() }}</strong> and visible in the Transactions view.
+                        Re-importing an overlapping statement will skip rows already present.
+                    </p>
+                    <Button label="Done" @click="bankOpen = false" />
+                </div>
+            </template>
+        </Dialog>
+
     </div>
 </template>
 
 <style scoped>
-.ds-view { max-width: 1000px; }
+.ds-view { max-width: 1440px; }
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0 0 1.5rem; }
+
+.bank-upload { margin-top: 1rem; }
+.bank-rawgrid { margin-top: 0.75rem; }
+.bank-rawgrid pre {
+    max-height: 180px; overflow: auto; font-size: 0.72rem; line-height: 1.3;
+    padding: 0.5rem 0.75rem; border-radius: 8px;
+    background: color-mix(in srgb, var(--p-content-background) 92%, var(--p-text-color));
+    color: var(--p-text-muted-color);
+}
 
 .section-header {
     display: flex; justify-content: space-between; align-items: center;

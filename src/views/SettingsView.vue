@@ -172,7 +172,12 @@ async function doWipe() {
     try {
         await invoke("wipe_all_data");
         wipeDialogVisible.value = false;
-        toast.add({ severity: "success", summary: "All data deleted", detail: "Portfolio and transaction data has been wiped.", life: 5000 });
+        // DB is clean now, but every Pinia store still holds pre-wipe data in
+        // memory (gamification XP/badges, portfolio holdings, transactions, …).
+        // Hard-reload the app so all screens re-fetch from the wiped DB and show
+        // empty state — cheaper and more reliable than refetching each store.
+        window.location.reload();
+        return;
     } catch (e: any) {
         toast.add({ severity: "error", summary: "Wipe failed", detail: friendlyError(e, "Couldn't delete the data. Try again."), life: 5000 });
     } finally {

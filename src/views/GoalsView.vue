@@ -334,7 +334,7 @@ onMounted(() => {
 <style scoped>
 .goals-view {
     padding: 1.5rem;
-    max-width: 1200px;
+    max-width: 1440px;
 }
 
 .goals-header {

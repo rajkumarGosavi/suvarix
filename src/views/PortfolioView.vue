@@ -61,7 +61,7 @@ const tabs = [
 </template>
 
 <style scoped>
-.portfolio-view { max-width: 1200px; }
+.portfolio-view { max-width: 1440px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; }
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0; }
 .header-stats { display: flex; gap: 2rem; }

@@ -170,6 +170,34 @@ pub(crate) fn wipe_all_data_impl(db: &crate::db::DbPool) -> Result<()> {
     conn.execute_batch(crate::db::migrations::DEFAULT_MILESTONES_SEED)
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+    // Gamification progress (XP total, earned badges, streak counts) is user
+    // state, so a wipe must clear it — otherwise "Investor Journey" keeps the
+    // old XP/level/badges after a full reset. `user_xp` and `streaks` carry a
+    // single seed row apiece that must come back at zero (like milestones);
+    // `user_badges` is pure user state and just gets cleared. The `badges`
+    // catalog is static seeded metadata (like default categories) — left alone.
+    #[cfg(feature = "gamification")]
+    {
+        conn.execute("DELETE FROM user_xp", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO user_xp (id, total_xp, level) VALUES (1, 0, 'Rookie')",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        conn.execute("DELETE FROM user_badges", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        conn.execute("DELETE FROM streaks", [])
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO streaks (streak_type, current_count, best_count) VALUES ('transaction', 0, 0)",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+    }
+
     // Every DELETE above fired that table's `trg_<table>_tombstone` trigger,
     // so at this point `sync_tombstones` holds a "deleted right now" entry
     // for every row this device ever had — which would silently block the
@@ -386,6 +414,45 @@ mod tests {
         let conn = db.get().unwrap();
         assert_eq!(row_count(&conn, "categories"), 13);
         assert_eq!(row_count(&conn, "milestones"), 9);
+    }
+
+    /// Gamification progress is user state — a wipe must reset XP to zero, drop
+    /// every earned badge, and reset streak counts, while leaving the static
+    /// `badges` catalog intact. This is the bug where "Investor Journey" kept
+    /// its old XP/level/badges after a full data wipe.
+    #[cfg(feature = "gamification")]
+    #[test]
+    fn wipe_resets_gamification_progress() {
+        let (_dir, db) = test_db_pool();
+        {
+            let conn = db.get().unwrap();
+            conn.execute("UPDATE user_xp SET total_xp = 1110, level = 'Pro Investor' WHERE id = 1", []).unwrap();
+            conn.execute("INSERT INTO user_badges (badge_id) VALUES ('first_investment')", []).unwrap();
+            conn.execute(
+                "UPDATE streaks SET current_count = 7, best_count = 12 WHERE streak_type = 'transaction'",
+                [],
+            )
+            .unwrap();
+        }
+
+        wipe_all_data_impl(&db).unwrap();
+
+        let conn = db.get().unwrap();
+        let (xp, level): (i64, String) = conn
+            .query_row("SELECT total_xp, level FROM user_xp WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(xp, 0, "XP must reset to zero after wipe");
+        assert_eq!(level, "Rookie", "level must reset to Rookie after wipe");
+        assert_eq!(row_count(&conn, "user_badges"), 0, "earned badges must be cleared after wipe");
+        let (cur, best): (i64, i64) = conn
+            .query_row(
+                "SELECT current_count, best_count FROM streaks WHERE streak_type = 'transaction'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((cur, best), (0, 0), "streak counts must reset after wipe");
+        assert_eq!(row_count(&conn, "badges"), 7, "the static badge catalog must survive a wipe");
     }
 
     // ── restore_database_impl ──

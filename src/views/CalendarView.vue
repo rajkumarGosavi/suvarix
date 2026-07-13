@@ -257,7 +257,7 @@ onMounted(loadEvents);
 </template>
 
 <style scoped>
-.calendar-view { max-width: 1200px; }
+.calendar-view { max-width: 1440px; }
 
 .page-header {
     display: flex;

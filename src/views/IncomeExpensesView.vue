@@ -329,7 +329,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.ie-view { max-width: 1100px; }
+.ie-view { max-width: 1440px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; }
 .period-controls { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0; }

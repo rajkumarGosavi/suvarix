@@ -196,6 +196,7 @@ pub fn run() {
             transactions::commands::delete_transaction,
             transactions::csv_import::preview_transaction_csv,
             transactions::csv_import::import_transactions_csv,
+            transactions::bank_import::import_bank_statement,
             // categories
             categories::commands::list_categories,
             categories::commands::add_category,

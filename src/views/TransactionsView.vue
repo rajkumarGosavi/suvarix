@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, reactive, computed } from "vue";
+import { useRouter } from "vue-router";
 import { useConfirm } from "primevue/useconfirm";
 import { useTransactionsStore } from "@/stores/transactions";
 import { useCategoriesStore } from "@/stores/categories";
@@ -10,6 +11,7 @@ import CategoryManagerDialog from "@/components/CategoryManagerDialog.vue";
 
 const store = useTransactionsStore();
 const categoriesStore = useCategoriesStore();
+const router = useRouter();
 const confirm = useConfirm();
 const { formatINR } = useCurrencyFormat();
 const { awardXP, updateStreak } = useGamificationSafe();
@@ -170,7 +172,16 @@ onMounted(() => {
     <div class="transactions-view">
         <div class="page-header">
             <h1 class="page-title">Transactions</h1>
-            <Button icon="pi pi-plus" label="Add Transaction" @click="openAdd" />
+            <div class="page-header-actions">
+                <Button
+                    icon="pi pi-building-columns"
+                    label="Import statement"
+                    severity="secondary"
+                    outlined
+                    @click="router.push('/data-sources')"
+                />
+                <Button icon="pi pi-plus" label="Add Transaction" @click="openAdd" />
+            </div>
         </div>
 
         <div class="filter-bar">
@@ -224,8 +235,8 @@ onMounted(() => {
             @sort="onSort"
             emptyMessage="No transactions yet. Click Add to record one."
         >
-            <Column field="date" header="Date" style="width:160px">
-                <template #body="{ data }">{{ formatDateTime(data.date) }}</template>
+            <Column field="date" header="Date" style="width:180px">
+                <template #body="{ data }"><span class="nowrap">{{ formatDateTime(data.date) }}</span></template>
             </Column>
             <Column field="type" header="Type" style="width:120px">
                 <template #body="{ data }">
@@ -233,7 +244,9 @@ onMounted(() => {
                 </template>
             </Column>
             <Column field="assetClass" header="Asset Class" />
-            <Column field="description" header="Description" />
+            <Column field="description" header="Description" style="max-width:280px">
+                <template #body="{ data }"><span class="ellipsis" :title="data.description">{{ data.description }}</span></template>
+            </Column>
             <Column field="category" header="Category" />
             <Column field="tag" header="Tag" style="width:110px">
                 <template #body="{ data }">
@@ -306,13 +319,16 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.transactions-view { max-width: 1100px; }
+.transactions-view { max-width: 1440px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; }
+.page-header-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0; }
 .filter-bar { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; flex-wrap: wrap; align-items: center; }
 .filter-input { min-width: 180px; }
 .page-count-hint { font-size: 0.85rem; color: var(--p-text-muted-color); margin: -0.5rem 0 1rem; }
 .loading { display: flex; justify-content: center; padding: 3rem; }
+.nowrap { white-space: nowrap; }
+.ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .dialog-form { display: flex; flex-direction: column; gap: 1rem; padding: 0.5rem 0; }
 .field { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; }
 .field-row { display: flex; gap: 1rem; }

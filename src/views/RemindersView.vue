@@ -648,7 +648,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.reminders-view { max-width: 900px; }
+.reminders-view { max-width: 1440px; }
 
 .page-header { margin-bottom: 1.25rem; }
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0; }

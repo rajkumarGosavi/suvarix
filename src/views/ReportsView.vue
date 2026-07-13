@@ -372,7 +372,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.reports-view { max-width: 1100px; }
+.reports-view { max-width: 1440px; }
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0 0 1.5rem; }
 
 .tab-toolbar {
