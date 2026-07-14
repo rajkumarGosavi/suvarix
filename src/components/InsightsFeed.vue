@@ -1,14 +1,29 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useInsightsStore, type Nudge } from "@/stores/insights";
+import { useAnalytics } from "@/composables/useAnalytics";
 
 const store = useInsightsStore();
 const router = useRouter();
+const { track } = useAnalytics();
 
 // Show the highest-priority handful; the rest stay one interaction away.
 const MAX_VISIBLE = 4;
 const visible = computed(() => store.nudges.slice(0, MAX_VISIBLE));
+
+// Log which nudges the user actually saw — once per mount, when the feed first
+// populates (data loads async after mount).
+let loggedShown = false;
+watch(
+    visible,
+    (v) => {
+        if (loggedShown || v.length === 0) return;
+        loggedShown = true;
+        track("insight_feed_shown", { count: v.length, ids: v.map((n) => n.id) });
+    },
+    { immediate: true },
+);
 
 // Severity → accent colour (PrimeVue palette vars, dark-mode safe with hex fallback).
 function accent(severity: Nudge["severity"]): string {
@@ -25,7 +40,13 @@ function accent(severity: Nudge["severity"]): string {
 }
 
 function act(n: Nudge) {
+    track("insight_clicked", { id: n.id, category: n.category, severity: n.severity });
     router.push(n.actionRoute);
+}
+
+function dismiss(n: Nudge) {
+    track("insight_dismissed", { id: n.id, category: n.category, severity: n.severity });
+    store.dismiss(n.id);
 }
 </script>
 
@@ -62,7 +83,7 @@ function act(n: Nudge) {
                             text
                             severity="secondary"
                             class="in-dismiss"
-                            @click="store.dismiss(n.id)"
+                            @click="dismiss(n)"
                         />
                     </div>
                 </div>

@@ -8,6 +8,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useAnalytics } from "@/composables/useAnalytics";
 import { useToast } from "primevue/usetoast";
 import { useRemindersStore } from "@/stores/reminders";
+import { useInsightsStore } from "@/stores/insights";
 import { useNotifications } from "@/composables/useNotifications";
 import { useGoalCheck } from "@/composables/useGoalCheck";
 import { useMaturityCheck } from "@/composables/useMaturityCheck";
@@ -20,6 +21,7 @@ const route = useRoute();
 const { track } = useAnalytics();
 const toast = useToast();
 const remindersStore = useRemindersStore();
+const insights = useInsightsStore();
 const { nativeNotify } = useNotifications();
 const { checkGoals } = useGoalCheck();
 const { checkMaturity } = useMaturityCheck();
@@ -101,6 +103,7 @@ onMounted(async () => {
     await loadLockSetting();
     checkReminders();
     checkSyncBlockStatus();
+    insights.fetch(); // nav badge count (feed itself refreshes on Dashboard)
     ACTIVITY_EVENTS.forEach(e => window.addEventListener(e, onActivity, { passive: true }));
     lockTimer = setInterval(() => {
         if (auth.checkAutoLock(autoLockMs)) {
@@ -181,18 +184,23 @@ watch(route, () => { drawerOpen.value = false; });
             </div>
 
             <div class="nav-list">
-                <Button
-                    v-for="item in navItems"
-                    :key="item.path"
-                    :icon="item.icon"
-                    :label="ui.sidebarCollapsed ? undefined : item.label"
-                    text
-                    class="nav-btn"
-                    :class="{ 'nav-btn--active': isActive(item.path) }"
-                    @click="router.push(item.path)"
-                    :aria-label="item.label"
-                    v-tooltip.right="ui.sidebarCollapsed ? item.label : undefined"
-                />
+                <div v-for="item in navItems" :key="item.path" class="nav-item-wrap">
+                    <Button
+                        :icon="item.icon"
+                        :label="ui.sidebarCollapsed ? undefined : item.label"
+                        text
+                        class="nav-btn"
+                        :class="{ 'nav-btn--active': isActive(item.path) }"
+                        @click="router.push(item.path)"
+                        :aria-label="item.label"
+                        v-tooltip.right="ui.sidebarCollapsed ? item.label : undefined"
+                    />
+                    <span
+                        v-if="item.path === '/dashboard' && insights.urgentCount > 0"
+                        class="nav-badge"
+                        :aria-label="`${insights.urgentCount} insights to act on`"
+                    >{{ insights.urgentCount }}</span>
+                </div>
             </div>
 
             <div class="sidebar-footer">
@@ -275,12 +283,42 @@ watch(route, () => { drawerOpen.value = false; });
     overflow-y: auto;
 }
 
+.nav-item-wrap {
+    position: relative;
+}
+
 .nav-btn {
     width: 100%;
     justify-content: flex-start;
     border-radius: 8px !important;
     font-size: 0.875rem;
     white-space: nowrap;
+}
+
+/* Urgent-insight count on the Dashboard nav item. */
+.nav-badge {
+    position: absolute;
+    top: 50%;
+    right: 0.5rem;
+    transform: translateY(-50%);
+    min-width: 1.1rem;
+    height: 1.1rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: var(--p-red-500, #ef4444);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1.1rem;
+    text-align: center;
+    pointer-events: none;
+}
+
+/* Collapsed rail: nudge the badge to the top-right corner of the icon. */
+.sidebar.collapsed .nav-badge {
+    top: 0.35rem;
+    right: 0.35rem;
+    transform: none;
 }
 
 .nav-btn--active {
