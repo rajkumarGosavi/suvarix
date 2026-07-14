@@ -12,6 +12,7 @@ pub mod dev_tools;
 pub mod error;
 pub mod financial_health;
 pub mod income_expenses;
+pub mod insights;
 pub mod liabilities;
 pub mod logging;
 pub mod models;
@@ -313,6 +314,9 @@ pub fn run() {
             // financial health (core — works with gamification off)
             financial_health::commands::get_financial_health,
             financial_health::commands::record_health_snapshot,
+            // insights / behavioural nudges (core)
+            insights::commands::get_insights,
+            insights::commands::dismiss_insight,
             // gamification (only compiled with --features gamification)
             #[cfg(feature = "gamification")]
             gamification::commands::bootstrap_gamification,

@@ -32,6 +32,7 @@ declare module 'vue' {
     InputIcon: typeof import('primevue/inputicon')['default']
     InputNumber: typeof import('primevue/inputnumber')['default']
     InputText: typeof import('primevue/inputtext')['default']
+    InsightsFeed: typeof import('./components/InsightsFeed.vue')['default']
     InsurancePanel: typeof import('./components/portfolio/InsurancePanel.vue')['default']
     Logo: typeof import('./components/Logo.vue')['default']
     Message: typeof import('primevue/message')['default']

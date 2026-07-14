@@ -12,6 +12,7 @@ use tauri_plugin_notification::NotificationExt;
 
 use crate::db::DbPool;
 use crate::error::Result;
+use crate::insights::commands::compute_nudges;
 use crate::reminders::commands::{maturity_alerts, upcoming_reminders};
 
 const CHECK_INTERVAL_SECS: u64 = 30 * 60;
@@ -19,6 +20,9 @@ const DEDUP_SETTING_KEY: &str = "notified_reminder_ids";
 const DEDUP_CAP: usize = 500;
 const BILL_LOOKAHEAD_DAYS: i32 = 1;
 const MATURITY_LOOKAHEAD_DAYS: i64 = 7;
+// At most this many nudge notifications per tick — the in-app feed carries the
+// rest, so a struggling user isn't buried in OS notifications.
+const NUDGE_PUSH_CAP: usize = 2;
 
 /// Holds the running background task so it can be cancelled on lock/quit.
 /// Uses Tauri's own runtime handle (not raw `tokio::spawn`) — `#[tauri::command]`
@@ -105,6 +109,33 @@ fn run_check(app: &AppHandle, db: &DbPool) -> Result<()> {
             &format!("Matures {}", m.maturity_date),
         );
         newly.push(key);
+    }
+
+    // Behavioural nudges: push only the urgent ones (critical/warning), deduped per
+    // ISO week so an unresolved problem re-nudges next week rather than every tick.
+    {
+        let conn = db.get()?;
+        let week = {
+            use chrono::Datelike;
+            let iso = chrono::Local::now().iso_week();
+            format!("{}W{:02}", iso.year(), iso.week())
+        };
+        let mut pushed = 0usize;
+        for n in compute_nudges(&conn) {
+            if pushed >= NUDGE_PUSH_CAP {
+                break;
+            }
+            if n.severity != "critical" && n.severity != "warning" {
+                continue;
+            }
+            let key = format!("nudge:{}:{}", n.id, week);
+            if notified.contains(&key) {
+                continue;
+            }
+            notify(app, &n.title, &n.body);
+            newly.push(key);
+            pushed += 1;
+        }
     }
 
     if !newly.is_empty() {

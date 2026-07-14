@@ -43,7 +43,7 @@ fn category_summary_impl(conn: &Connection, start: &str, end: &str) -> Result<Ve
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-fn budget_status_impl(conn: &Connection, start: &str, end: &str) -> Result<Vec<BudgetStatus>> {
+pub(crate) fn budget_status_impl(conn: &Connection, start: &str, end: &str) -> Result<Vec<BudgetStatus>> {
     let mut stmt = conn.prepare(
         "SELECT b.category, b.monthly_limit,
                 COALESCE(SUM(t.amount), 0.0) AS spent
@@ -161,7 +161,7 @@ fn last_month_bounds() -> (String, String) {
     (first_of_prev.to_string(), format!("{} 23:59:59", last_of_prev))
 }
 
-fn current_month_bounds() -> (String, String) {
+pub(crate) fn current_month_bounds() -> (String, String) {
     use chrono::{Datelike, Local};
     let now = Local::now();
     let start = format!("{}-{:02}-01", now.year(), now.month());

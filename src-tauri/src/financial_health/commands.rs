@@ -418,7 +418,7 @@ fn pillar_networth(conn: &Connection) -> Pillar {
 
 // ─── Core computation ────────────────────────────────────────────────────────
 
-fn compute_score(conn: &Connection) -> FinancialHealthScore {
+pub(crate) fn compute_score(conn: &Connection) -> FinancialHealthScore {
     let mut pillars = vec![
         pillar_savings(conn),
         pillar_emergency(conn),
