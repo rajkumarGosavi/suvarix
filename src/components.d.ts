@@ -24,6 +24,7 @@ declare module 'vue' {
     DebtPayoffPlanner: typeof import('./components/DebtPayoffPlanner.vue')['default']
     Dialog: typeof import('primevue/dialog')['default']
     Divider: typeof import('primevue/divider')['default']
+    EmergencyFundCard: typeof import('./components/EmergencyFundCard.vue')['default']
     EquityPanel: typeof import('./components/portfolio/EquityPanel.vue')['default']
     FdPanel: typeof import('./components/portfolio/FdPanel.vue')['default']
     FileUpload: typeof import('primevue/fileupload')['default']

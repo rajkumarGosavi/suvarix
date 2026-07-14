@@ -504,6 +504,92 @@ pub fn record_health_snapshot(score: f64, state: State<DbState>) -> Result<Healt
     })
 }
 
+// ─── Emergency fund (first-class view over the same liquid/expense inputs) ──────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmergencyFund {
+    /// Average monthly expense (trailing 90 days / 3).
+    pub monthly_expense: f64,
+    /// Liquid buffer: positive cash + FDs + liquid/overnight MFs.
+    pub liquid_assets: f64,
+    /// User-set goal in months of expenses (default 6).
+    pub target_months: f64,
+    /// `monthly_expense * target_months`.
+    pub target_amount: f64,
+    /// How many months of expenses the buffer currently covers.
+    pub months_covered: f64,
+    /// 0–100 toward the target.
+    pub coverage_pct: f64,
+    /// Amount still needed to hit the target (0 if met).
+    pub shortfall: f64,
+    /// "underfunded" | "on_track" | "funded" — drives the frontend colour/copy.
+    pub status: String,
+}
+
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
+/// Emergency-fund status computed from the same liquid-assets / expense inputs the
+/// health score uses. Read-only; target comes from `emergency_fund_target_months`.
+#[tauri::command]
+pub fn get_emergency_fund(state: State<DbState>) -> Result<EmergencyFund> {
+    let conn = state.0.get()?;
+    Ok(compute_emergency_fund(&conn))
+}
+
+fn compute_emergency_fund(conn: &Connection) -> EmergencyFund {
+    let monthly = expense_90(conn) / 3.0;
+    let liquid = liquid_assets(conn);
+    let target_months = setting_f64(conn, "emergency_fund_target_months", 6.0);
+    let target_amount = monthly * target_months;
+
+    let months_covered = if monthly > 0.0 { liquid / monthly } else { 0.0 };
+    let coverage_pct = if target_amount > 0.0 {
+        (liquid / target_amount * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let shortfall = (target_amount - liquid).max(0.0);
+    let status = if target_amount <= 0.0 {
+        "underfunded"
+    } else if coverage_pct >= 100.0 {
+        "funded"
+    } else if coverage_pct >= 50.0 {
+        "on_track"
+    } else {
+        "underfunded"
+    };
+
+    EmergencyFund {
+        monthly_expense: round2(monthly),
+        liquid_assets: round2(liquid),
+        target_months,
+        target_amount: round2(target_amount),
+        months_covered: round2(months_covered),
+        coverage_pct: round2(coverage_pct),
+        shortfall: round2(shortfall),
+        status: status.to_string(),
+    }
+}
+
+/// Sets the emergency-fund goal (months of expenses). Clamped to 1–24.
+#[tauri::command]
+pub fn set_emergency_fund_target(months: f64, state: State<DbState>) -> Result<()> {
+    if !(months.is_finite() && months >= 1.0 && months <= 24.0) {
+        return Err(AppError::Validation("target months must be between 1 and 24".into()));
+    }
+    let conn = state.0.get()?;
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('emergency_fund_target_months', ?1) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [months.to_string()],
+    )
+    .map_err(|e| AppError::Database(e.to_string()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,6 +612,30 @@ mod tests {
                                                  // inverted (lower is better)
         assert_eq!(scale(0.20, 0.50, 0.20), 100.0);
         assert_eq!(scale(0.50, 0.50, 0.20), 0.0);
+    }
+
+    #[test]
+    fn emergency_fund_coverage_and_shortfall() {
+        let c = conn();
+        // 90 days of expenses = 90000 → monthly 30000; target 6 months = 180000.
+        c.execute(
+            "INSERT INTO transactions (type, amount, date) VALUES ('expense', 90000, date('now','-10 days'))",
+            [],
+        )
+        .unwrap();
+        // Liquid buffer via income cash: 90000 in the ledger.
+        c.execute(
+            "INSERT INTO transactions (type, amount, date) VALUES ('income', 180000, date('now','-10 days'))",
+            [],
+        )
+        .unwrap();
+        let ef = compute_emergency_fund(&c);
+        assert_eq!(ef.monthly_expense, 30000.0);
+        // cash = 180000 income - 90000 expense = 90000 liquid → 3 months.
+        assert_eq!(ef.months_covered, 3.0);
+        assert_eq!(ef.target_amount, 180000.0);
+        assert_eq!(ef.shortfall, 90000.0);
+        assert_eq!(ef.status, "on_track"); // 50% coverage
     }
 
     #[test]

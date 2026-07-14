@@ -23,9 +23,21 @@ export interface HealthSnapshotResult {
     alreadyRecordedToday: boolean;
 }
 
+export interface EmergencyFund {
+    monthlyExpense: number;
+    liquidAssets: number;
+    targetMonths: number;
+    targetAmount: number;
+    monthsCovered: number;
+    coveragePct: number;
+    shortfall: number;
+    status: "underfunded" | "on_track" | "funded";
+}
+
 export const useFinancialHealthStore = defineStore("financialHealth", {
     state: () => ({
         score: null as FinancialHealthScore | null,
+        emergencyFund: null as EmergencyFund | null,
         isLoading: false,
     }),
     getters: {
@@ -54,6 +66,17 @@ export const useFinancialHealthStore = defineStore("financialHealth", {
             } catch {
                 return null;
             }
+        },
+        async fetchEmergencyFund() {
+            try {
+                this.emergencyFund = await invoke<EmergencyFund>("get_emergency_fund");
+            } catch {
+                // non-fatal
+            }
+        },
+        async setEmergencyTarget(months: number) {
+            await invoke("set_emergency_fund_target", { months });
+            await this.fetchEmergencyFund();
         },
     },
 });

@@ -315,6 +315,8 @@ pub fn run() {
             // financial health (core — works with gamification off)
             financial_health::commands::get_financial_health,
             financial_health::commands::record_health_snapshot,
+            financial_health::commands::get_emergency_fund,
+            financial_health::commands::set_emergency_fund_target,
             // insights / behavioural nudges (core)
             insights::commands::get_insights,
             insights::commands::dismiss_insight,

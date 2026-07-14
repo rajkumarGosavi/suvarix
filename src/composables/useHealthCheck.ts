@@ -17,6 +17,8 @@ export function useHealthCheck() {
 
     async function runHealthCheck() {
         await health.fetch();
+        // Emergency-fund status shares the health-score inputs; refresh alongside.
+        await health.fetchEmergencyFund();
         const score = health.score;
         if (!score) return;
 

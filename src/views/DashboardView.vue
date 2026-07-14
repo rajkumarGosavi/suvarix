@@ -104,6 +104,8 @@ const chartOptions = computed(() => ({
 
             <FinancialHealthCard />
 
+            <EmergencyFundCard />
+
             <GamificationWidget v-if="isGamified" />
 
             <ChallengesCard v-if="isGamified" />
