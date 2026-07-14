@@ -129,7 +129,7 @@ fn seed_xp_row(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn award_xp_internal(conn: &Connection, amount: i32) -> Result<(i64, bool, String)> {
+pub(crate) fn award_xp_internal(conn: &Connection, amount: i32) -> Result<(i64, bool, String)> {
     seed_xp_row(conn)?;
     let old_xp: i64 = conn
         .query_row("SELECT total_xp FROM user_xp WHERE id = 1", [], |r| r.get(0))

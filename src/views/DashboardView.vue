@@ -106,6 +106,8 @@ const chartOptions = computed(() => ({
 
             <GamificationWidget v-if="isGamified" />
 
+            <ChallengesCard v-if="isGamified" />
+
             <div class="card chart-card" v-if="portfolio.allocation.length > 0">
                 <h3>Asset Allocation</h3>
                 <div class="chart-wrap">

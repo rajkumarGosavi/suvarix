@@ -62,6 +62,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // MIGRATION_024: outcome-bound wealth badges — gamification-only, INSERT OR IGNORE, idempotent.
     #[cfg(feature = "gamification")]
     conn.execute_batch(MIGRATION_024).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_025: opt-in savings challenges — gamification-only, CREATE ... IF NOT EXISTS, idempotent.
+    #[cfg(feature = "gamification")]
+    conn.execute_batch(MIGRATION_025).map_err(|e| AppError::Database(e.to_string()))?;
     tracing::debug!("migrations complete");
     Ok(())
 }
@@ -95,6 +98,27 @@ INSERT OR IGNORE INTO badges (id, name, description, icon, xp_reward) VALUES
     ('first_lakh',   'First Lakh',      'Grew net worth past ₹1 lakh',                  '🌱', 20),
     ('ten_lakh',     'Ten Lakh Club',   'Grew net worth past ₹10 lakh',                 '💎', 30),
     ('savings_star', 'Savings Star',    'Saved over 50% of income across 90 days',      '⭐', 30);
+";
+
+// Opt-in, time-boxed savings challenges. Progress is computed on demand from the
+// transaction ledger / budgets (no per-tick writes); only status transitions and
+// XP awards are persisted. Gamification-gated like the rest of the XP system.
+#[cfg(feature = "gamification")]
+const MIGRATION_025: &str = "
+CREATE TABLE IF NOT EXISTS user_challenges (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL,          -- 'save_amount' | 'no_spend' | 'budget_hold'
+    title        TEXT NOT NULL,
+    icon         TEXT NOT NULL,
+    target       REAL NOT NULL,          -- rupees (save_amount) or days (no_spend); unused for budget_hold
+    start_date   TEXT NOT NULL,          -- YYYY-MM-DD inclusive
+    end_date     TEXT NOT NULL,          -- YYYY-MM-DD inclusive
+    xp_reward    INTEGER NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'completed' | 'failed'
+    completed_at TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_user_challenges_status ON user_challenges(status);
 ";
 
 /// Tables that participate in cross-device sync (see `backup::commands`). Single

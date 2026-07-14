@@ -328,6 +328,17 @@ pub fn run() {
             gamification::commands::update_streak,
             #[cfg(feature = "gamification")]
             gamification::commands::check_and_award_badges,
+            // gamification – savings challenges
+            #[cfg(feature = "gamification")]
+            gamification::challenges::list_challenge_templates,
+            #[cfg(feature = "gamification")]
+            gamification::challenges::join_challenge,
+            #[cfg(feature = "gamification")]
+            gamification::challenges::get_challenges,
+            #[cfg(feature = "gamification")]
+            gamification::challenges::evaluate_challenges,
+            #[cfg(feature = "gamification")]
+            gamification::challenges::abandon_challenge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
