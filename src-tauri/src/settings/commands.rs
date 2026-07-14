@@ -452,7 +452,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!((cur, best), (0, 0), "streak counts must reset after wipe");
-        assert_eq!(row_count(&conn, "badges"), 7, "the static badge catalog must survive a wipe");
+        assert_eq!(row_count(&conn, "badges"), 14, "the static badge catalog must survive a wipe");
     }
 
     // ── restore_database_impl ──

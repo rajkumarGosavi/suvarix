@@ -81,6 +81,15 @@ pub struct BadgeContext {
     pub check_emergency_ready: bool,
     #[serde(default)]
     pub check_debt_light: bool,
+    // Outcome-bound wealth badges — the flag only *triggers* a check; the actual
+    // threshold is verified backend-side against the DB (net worth / savings rate),
+    // so the frontend never needs to know or be trusted with the number.
+    #[serde(default)]
+    pub check_first_lakh: bool,
+    #[serde(default)]
+    pub check_ten_lakh: bool,
+    #[serde(default)]
+    pub check_savings_star: bool,
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -534,5 +543,53 @@ pub fn check_and_award_badges(context: BadgeContext, state: State<DbState>) -> R
         }
     }
 
+    // Wealth outcomes — verified here from the DB, not from a frontend-supplied number.
+    if context.check_first_lakh || context.check_ten_lakh {
+        let nw = crate::portfolio::calculator::calc_net_worth(&conn)
+            .map(|s| s.net_worth)
+            .unwrap_or(0.0);
+        if context.check_first_lakh && nw >= 100_000.0 {
+            if let Ok(Some(b)) = award_badge_if_new(&conn, "first_lakh") {
+                earned.push(b);
+            }
+        }
+        if context.check_ten_lakh && nw >= 1_000_000.0 {
+            if let Ok(Some(b)) = award_badge_if_new(&conn, "ten_lakh") {
+                earned.push(b);
+            }
+        }
+    }
+
+    if context.check_savings_star && savings_rate_90d(&conn) >= 0.50 {
+        if let Ok(Some(b)) = award_badge_if_new(&conn, "savings_star") {
+            earned.push(b);
+        }
+    }
+
     Ok(earned)
+}
+
+// Trailing-90-day savings rate: (income − expense/emi) / income. 0.0 when no income
+// has been logged (so the badge can't be earned on empty data).
+fn savings_rate_90d(conn: &Connection) -> f64 {
+    let income: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount),0) FROM transactions \
+             WHERE type = 'income' AND date(date) >= date('now','-90 days')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    if income <= 0.0 {
+        return 0.0;
+    }
+    let expense: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(amount),0) FROM transactions \
+             WHERE type IN ('expense','emi') AND date(date) >= date('now','-90 days')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0.0);
+    (income - expense) / income
 }

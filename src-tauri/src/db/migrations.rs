@@ -59,6 +59,9 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // (the `badges` table itself only exists under that feature). INSERT OR IGNORE, idempotent.
     #[cfg(feature = "gamification")]
     conn.execute_batch(MIGRATION_023).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_024: outcome-bound wealth badges — gamification-only, INSERT OR IGNORE, idempotent.
+    #[cfg(feature = "gamification")]
+    conn.execute_batch(MIGRATION_024).map_err(|e| AppError::Database(e.to_string()))?;
     tracing::debug!("migrations complete");
     Ok(())
 }
@@ -82,6 +85,16 @@ INSERT OR IGNORE INTO badges (id, name, description, icon, xp_reward) VALUES
     ('health_aplus',    'Peak Health',       'Reached a grade-A+ financial health score',  '🏆', 50),
     ('emergency_ready', 'Safety Net',        'Built 6 months of emergency-fund cover',     '🛟', 30),
     ('debt_light',      'Debt Light',        'Kept EMIs under 20% of income',              '🪶', 30);
+";
+
+// Outcome-bound wealth badges — awarded when a real financial outcome is reached
+// (verified backend-side in gamification::check_and_award_badges), not for activity.
+#[cfg(feature = "gamification")]
+const MIGRATION_024: &str = "
+INSERT OR IGNORE INTO badges (id, name, description, icon, xp_reward) VALUES
+    ('first_lakh',   'First Lakh',      'Grew net worth past ₹1 lakh',                  '🌱', 20),
+    ('ten_lakh',     'Ten Lakh Club',   'Grew net worth past ₹10 lakh',                 '💎', 30),
+    ('savings_star', 'Savings Star',    'Saved over 50% of income across 90 days',      '⭐', 30);
 ";
 
 /// Tables that participate in cross-device sync (see `backup::commands`). Single

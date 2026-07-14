@@ -14,6 +14,9 @@ export interface BadgeCheckContext {
     checkHealthAplus?: boolean;
     checkEmergencyReady?: boolean;
     checkDebtLight?: boolean;
+    checkFirstLakh?: boolean;
+    checkTenLakh?: boolean;
+    checkSavingsStar?: boolean;
 }
 
 const NOOP = async () => {};
@@ -110,6 +113,9 @@ export function useGamification() {
                     checkHealthAplus: context.checkHealthAplus ?? false,
                     checkEmergencyReady: context.checkEmergencyReady ?? false,
                     checkDebtLight: context.checkDebtLight ?? false,
+                    checkFirstLakh: context.checkFirstLakh ?? false,
+                    checkTenLakh: context.checkTenLakh ?? false,
+                    checkSavingsStar: context.checkSavingsStar ?? false,
                 },
             });
             await store.fetch();

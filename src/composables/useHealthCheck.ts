@@ -47,6 +47,10 @@ export function useHealthCheck() {
             checkHealthAplus: score.overall >= 85,
             checkEmergencyReady: (emergency?.score ?? 0) >= 100,
             checkDebtLight: (debt?.score ?? 0) >= 100,
+            // Wealth outcomes — always trigger; backend verifies the real threshold.
+            checkFirstLakh: true,
+            checkTenLakh: true,
+            checkSavingsStar: true,
         });
     }
 
