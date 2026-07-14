@@ -229,6 +229,9 @@ onMounted(() => store.fetchAll());
         <div v-if="store.isLoading" class="loading"><ProgressSpinner /></div>
 
         <template v-else>
+            <!-- Debt payoff planner (avalanche/snowball) -->
+            <DebtPayoffPlanner />
+
             <!-- Loans -->
             <div class="section-header">
                 <h2>Loans</h2>

@@ -52,5 +52,31 @@ export const useLiabilitiesStore = defineStore("liabilities", {
             await invoke("delete_credit_card", { id });
             await this.fetchAll();
         },
+
+        async getPayoffPlan(strategy: "avalanche" | "snowball", extraMonthly: number) {
+            return await invoke<DebtPlan>("get_debt_payoff_plan", { strategy, extraMonthly });
+        },
     },
 });
+
+export interface PayoffStep {
+    id: number;
+    kind: string;
+    name: string;
+    balance: number;
+    annualRatePct: number;
+    payoffMonth: number;
+}
+
+export interface DebtPlan {
+    strategy: string;
+    totalDebt: number;
+    totalMinPayment: number;
+    monthlyBudget: number;
+    monthsToDebtFree: number;
+    totalInterest: number;
+    interestSaved: number;
+    monthsSaved: number;
+    neverClears: boolean;
+    steps: PayoffStep[];
+}

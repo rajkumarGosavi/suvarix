@@ -210,6 +210,7 @@ pub fn run() {
             liabilities::commands::update_loan,
             liabilities::commands::delete_loan,
             liabilities::commands::get_amortization_schedule,
+            liabilities::payoff::get_debt_payoff_plan,
             liabilities::commands::list_credit_cards,
             liabilities::commands::add_credit_card,
             liabilities::commands::update_credit_card,

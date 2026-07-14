@@ -21,6 +21,7 @@ declare module 'vue' {
     CryptoPanel: typeof import('./components/portfolio/CryptoPanel.vue')['default']
     DataTable: typeof import('primevue/datatable')['default']
     DatePicker: typeof import('primevue/datepicker')['default']
+    DebtPayoffPlanner: typeof import('./components/DebtPayoffPlanner.vue')['default']
     Dialog: typeof import('primevue/dialog')['default']
     Divider: typeof import('primevue/divider')['default']
     EquityPanel: typeof import('./components/portfolio/EquityPanel.vue')['default']
