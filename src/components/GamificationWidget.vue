@@ -4,6 +4,7 @@ import { useGamificationStore } from "@/stores/gamification";
 
 const store = useGamificationStore();
 const stats = computed(() => store.stats);
+const savingsStreakCount = computed(() => store.savingsStreak?.currentStreak ?? 0);
 
 onMounted(async () => {
     if (!store.stats) await store.fetch();
@@ -44,11 +45,23 @@ const levelSeverity = computed(() => {
                 </span>
             </div>
 
-            <div class="gw-streaks" v-if="store.txStreak && store.txStreak.currentCount > 0">
-                <div class="gw-streak-item">
+            <div
+                class="gw-streaks"
+                v-if="(store.txStreak && store.txStreak.currentCount > 0) || savingsStreakCount > 0"
+            >
+                <div class="gw-streak-item" v-if="store.txStreak && store.txStreak.currentCount > 0">
                     <span class="gw-streak-icon">📊</span>
                     <span class="gw-streak-count">{{ store.txStreak.currentCount }}</span>
                     <span class="gw-streak-label">week tx streak</span>
+                </div>
+                <div
+                    class="gw-streak-item"
+                    v-if="savingsStreakCount > 0"
+                    v-tooltip.top="'Consecutive months you saved more than you spent'"
+                >
+                    <span class="gw-streak-icon">🔥</span>
+                    <span class="gw-streak-count">{{ savingsStreakCount }}</span>
+                    <span class="gw-streak-label">mo savings streak</span>
                 </div>
             </div>
 

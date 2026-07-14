@@ -328,6 +328,8 @@ pub fn run() {
             gamification::commands::update_streak,
             #[cfg(feature = "gamification")]
             gamification::commands::check_and_award_badges,
+            #[cfg(feature = "gamification")]
+            gamification::commands::get_savings_streak,
             // gamification – savings challenges
             #[cfg(feature = "gamification")]
             gamification::challenges::list_challenge_templates,

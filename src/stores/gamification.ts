@@ -40,9 +40,18 @@ export interface StreakUpdateResult {
     streakBonusXp: number;
 }
 
+export interface SavingsStreak {
+    currentStreak: number;
+    bestStreak: number;
+    thisMonthSaved: number;
+    thisMonthPositive: boolean;
+    xpAwarded: number;
+}
+
 export const useGamificationStore = defineStore("gamification", {
     state: () => ({
         stats: null as GamificationStats | null,
+        savingsStreak: null as SavingsStreak | null,
         isLoading: false,
     }),
     getters: {
@@ -61,6 +70,8 @@ export const useGamificationStore = defineStore("gamification", {
             try {
                 await invoke("bootstrap_gamification").catch(() => {});
                 this.stats = await invoke<GamificationStats>("get_gamification_stats");
+                // Computed behaviour streak (consecutive positive-savings months).
+                this.savingsStreak = await invoke<SavingsStreak>("get_savings_streak").catch(() => null);
             } catch {
                 // non-fatal
             } finally {

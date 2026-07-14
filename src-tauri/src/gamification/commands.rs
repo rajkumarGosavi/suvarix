@@ -593,3 +593,153 @@ fn savings_rate_90d(conn: &Connection) -> f64 {
         .unwrap_or(0.0);
     (income - expense) / income
 }
+
+// ─── Behaviour streak: consecutive positive-savings months ─────────────────────
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavingsStreak {
+    /// Consecutive *completed* months (ending last month) with net savings > 0.
+    pub current_streak: i64,
+    /// All-time best run (persisted in app_settings).
+    pub best_streak: i64,
+    /// Net savings for the in-progress current month.
+    pub this_month_saved: f64,
+    pub this_month_positive: bool,
+    /// XP granted this call (improvement-only; 0 unless a new best was set).
+    pub xp_awarded: i64,
+}
+
+const SAVINGS_STREAK_BEST_KEY: &str = "savings_streak_best";
+
+// "YYYY-MM" one month earlier.
+fn prev_ym(ym: &str) -> String {
+    let y: i32 = ym[..4].parse().unwrap_or(2000);
+    let m: u32 = ym[5..7].parse().unwrap_or(1);
+    if m <= 1 {
+        format!("{:04}-12", y - 1)
+    } else {
+        format!("{:04}-{:02}", y, m - 1)
+    }
+}
+
+// Count consecutive months (starting from the month before `this_ym`, going back)
+// that have a recorded, strictly-positive net savings. A gap (month with no data)
+// or a non-positive month ends the run.
+fn positive_month_streak(
+    by_month: &std::collections::HashMap<String, f64>,
+    this_ym: &str,
+) -> i64 {
+    let mut streak = 0i64;
+    let mut ym = prev_ym(this_ym);
+    while let Some(&net) = by_month.get(&ym) {
+        if net > 0.0 {
+            streak += 1;
+            ym = prev_ym(&ym);
+        } else {
+            break;
+        }
+    }
+    streak
+}
+
+/// Computes the consecutive-positive-savings-month streak from the ledger, updates
+/// the persisted best, and awards improvement-only XP when a new best is set.
+#[tauri::command]
+pub fn get_savings_streak(state: State<DbState>) -> Result<SavingsStreak> {
+    let conn = state.0.get()?;
+
+    // Net savings per calendar month: income − (expense + emi).
+    let mut by_month: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT strftime('%Y-%m', date) AS ym, \
+                    SUM(CASE WHEN type='income' THEN amount ELSE 0 END) - \
+                    SUM(CASE WHEN type IN ('expense','emi') THEN amount ELSE 0 END) AS net \
+                 FROM transactions GROUP BY ym",
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        for (ym, net) in rows.flatten() {
+            by_month.insert(ym, net);
+        }
+    }
+
+    let now = chrono::Local::now();
+    let this_ym = now.format("%Y-%m").to_string();
+    let this_month_saved = by_month.get(&this_ym).copied().unwrap_or(0.0);
+
+    // Walk backwards from last completed month while each has recorded, positive savings.
+    let streak = positive_month_streak(&by_month, &this_ym);
+
+    // Persisted best + improvement-only XP.
+    let stored_best: i64 = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [SAVINGS_STREAK_BEST_KEY],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+
+    let mut xp_awarded = 0i64;
+    let best = if streak > stored_best {
+        // Reward each newly-reached month, capped so it can't be farmed.
+        let gained = ((streak - stored_best).min(3) * 10) as i32;
+        award_xp_internal(&conn, gained)?;
+        xp_awarded = gained as i64;
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![SAVINGS_STREAK_BEST_KEY, streak.to_string()],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        streak
+    } else {
+        stored_best
+    };
+
+    Ok(SavingsStreak {
+        current_streak: streak,
+        best_streak: best,
+        this_month_saved,
+        this_month_positive: this_month_saved > 0.0,
+        xp_awarded,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn prev_ym_rolls_over_year() {
+        assert_eq!(prev_ym("2026-01"), "2025-12");
+        assert_eq!(prev_ym("2026-07"), "2026-06");
+    }
+
+    #[test]
+    fn streak_counts_back_until_gap_or_negative() {
+        let mut m = HashMap::new();
+        // this month = 2026-07 (in progress, ignored by the walk).
+        m.insert("2026-06".to_string(), 500.0); // +
+        m.insert("2026-05".to_string(), 1200.0); // +
+        m.insert("2026-04".to_string(), -100.0); // breaks here
+        m.insert("2026-03".to_string(), 800.0); // not reached
+        assert_eq!(positive_month_streak(&m, "2026-07"), 2);
+    }
+
+    #[test]
+    fn streak_breaks_on_missing_month() {
+        let mut m = HashMap::new();
+        m.insert("2026-06".to_string(), 500.0);
+        // 2026-05 absent → gap ends the run at 1.
+        m.insert("2026-04".to_string(), 800.0);
+        assert_eq!(positive_month_streak(&m, "2026-07"), 1);
+    }
+}
