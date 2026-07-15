@@ -63,17 +63,17 @@ pub fn get_sync_block_status(state: State<DbState>) -> Result<bool> {
         .unwrap_or(false))
 }
 
-// Excludes: password_hash, password_salt (auth), *_access_token/*_token_date (session)
+// Excludes: password_hash, password_salt (auth), *_access_token/*_token_date
+// (session). Broker API keys/secrets/client ids are deliberately NOT synced:
+// since M2 they're field-encrypted at rest with a key derived from *this*
+// device's master password (see `data_sources::commands::BROKER_SECRET_KEYS`),
+// so a peer with a different master password could never decrypt them anyway —
+// and exporting broker secrets into a file that lands in a cloud folder was its
+// own exposure. Each device configures its brokers once, locally.
 const SYNC_SETTINGS_KEYS: &[&str] = &[
     "currency",
     "auto_lock_minutes",
     "theme",
-    "zerodha_api_key",
-    "zerodha_api_secret",
-    "upstox_api_key",
-    "upstox_api_secret",
-    "angel_api_key",
-    "angel_client_id",
 ];
 
 // ── Return types ──────────────────────────────────────────────
@@ -211,7 +211,7 @@ fn encrypt_backup_bytes(payload: &BackupPayload, password: &str) -> Result<Vec<u
 
     let salt: [u8; SALT_LEN] = random();
     let nonce_bytes: [u8; NONCE_LEN] = random();
-    let key = derive_key(password, &salt);
+    let key = derive_key(password, &salt, PBKDF2_ITERS);
     let ciphertext = aes_encrypt(&key, &nonce_bytes, &json_bytes)?;
 
     let mut file = Vec::with_capacity(HEADER_LEN + ciphertext.len());
@@ -1264,8 +1264,7 @@ fn decrypt_backup_bytes(data: &[u8], password: &str) -> Result<BackupPayload> {
     let nonce_bytes = &data[5 + SALT_LEN..HEADER_LEN];
     let ciphertext = &data[HEADER_LEN..];
 
-    let key = derive_key(password, salt);
-    let json_bytes = aes_decrypt(&key, nonce_bytes, ciphertext)?;
+    let json_bytes = decrypt_with_kdf_fallback(password, salt, nonce_bytes, ciphertext)?;
 
     serde_json::from_slice(&json_bytes).map_err(|e| AppError::Parse(format!("parse backup: {e}")))
 }
@@ -1277,7 +1276,7 @@ fn decrypt_backup_bytes(data: &[u8], password: &str) -> Result<BackupPayload> {
 pub(crate) fn encrypt_sync_password(sync_password: &str, master_password: &str) -> Result<String> {
     let salt: [u8; SALT_LEN] = random();
     let nonce_bytes: [u8; NONCE_LEN] = random();
-    let key = derive_key(master_password, &salt);
+    let key = derive_key(master_password, &salt, PBKDF2_ITERS);
     let ciphertext = aes_encrypt(&key, &nonce_bytes, sync_password.as_bytes())?;
 
     let mut buf = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
@@ -1297,17 +1296,78 @@ pub(crate) fn decrypt_sync_password(encrypted_b64: &str, master_password: &str) 
     let salt = &buf[0..SALT_LEN];
     let nonce_bytes = &buf[SALT_LEN..SALT_LEN + NONCE_LEN];
     let ciphertext = &buf[SALT_LEN + NONCE_LEN..];
-    let key = derive_key(master_password, salt);
-    let plain = aes_decrypt(&key, nonce_bytes, ciphertext)?;
+    let plain = decrypt_with_kdf_fallback(master_password, salt, nonce_bytes, ciphertext)?;
     String::from_utf8(plain).map_err(|e| AppError::Validation(format!("bad sync password: {e}")))
+}
+
+// ── Field-level secret encryption (M2) ────────────────────────
+
+/// Marker prefix on an `app_settings` value that has been field-encrypted
+/// (broker API keys/secrets/tokens). Distinguishes an encrypted blob from a
+/// legacy plaintext value written before M2, so reads transparently handle both
+/// during the upgrade window. The `v1` allows a future scheme change.
+const SECRET_FIELD_PREFIX: &str = "enc:v1:";
+
+/// True if `value` is already a field-encrypted blob — guards the one-time
+/// migration against double-encrypting.
+pub(crate) fn is_secret_field_encrypted(value: &str) -> bool {
+    value.starts_with(SECRET_FIELD_PREFIX)
+}
+
+/// Field-level encryption for a single sensitive `app_settings` value, keyed by
+/// the master password — same PBKDF2 + AES-256-GCM primitives as
+/// `encrypt_sync_password`, just tagged with a version prefix. This is on top of
+/// SQLCipher's whole-DB at-rest encryption: it keeps the value ciphertext even
+/// in a live query result, and — by design — makes it undecryptable off this
+/// device, which is why these keys are no longer in `SYNC_SETTINGS_KEYS` (M2).
+pub(crate) fn encrypt_secret_field(plaintext: &str, master_password: &str) -> Result<String> {
+    Ok(format!("{SECRET_FIELD_PREFIX}{}", encrypt_sync_password(plaintext, master_password)?))
+}
+
+/// Inverse of `encrypt_secret_field`. A value without the version prefix is a
+/// legacy plaintext (written before M2) and is returned unchanged, so existing
+/// installs keep working until `encrypt_broker_secrets_once` rewrites them.
+pub(crate) fn decrypt_secret_field(stored: &str, master_password: &str) -> Result<String> {
+    match stored.strip_prefix(SECRET_FIELD_PREFIX) {
+        Some(b64) => decrypt_sync_password(b64, master_password),
+        None => Ok(stored.to_string()),
+    }
 }
 
 // ── Crypto ────────────────────────────────────────────────────
 
-fn derive_key(password: &str, salt: &[u8]) -> [u8; 32] {
+/// PBKDF2 iteration count for keys derived from user passwords (backup/sync
+/// files, sync-password blob, broker secret fields). Raised from the original
+/// 100k to meet OWASP guidance (M1). Blobs written at the old cost still open
+/// via `decrypt_with_kdf_fallback` — no file-format or version bump needed.
+const PBKDF2_ITERS: u32 = 600_000;
+/// The pre-M1 cost, tried only as a fallback when decrypting a blob that was
+/// written before the increase.
+const PBKDF2_ITERS_LEGACY: u32 = 100_000;
+
+fn derive_key(password: &str, salt: &[u8], iters: u32) -> [u8; 32] {
     let mut key = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 100_000, &mut key);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iters, &mut key);
     key
+}
+
+/// Derive + AES-GCM-decrypt, trying the current KDF cost first and the legacy
+/// cost only if that fails (M1 backward compatibility). AES-GCM's auth tag makes
+/// a wrong-cost attempt fail cleanly rather than returning garbage, so this can
+/// never silently pick the wrong key. A re-export after a successful open
+/// rewrites the blob at the current cost.
+fn decrypt_with_kdf_fallback(
+    password: &str,
+    salt: &[u8],
+    nonce_bytes: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>> {
+    let key = derive_key(password, salt, PBKDF2_ITERS);
+    if let Ok(plain) = aes_decrypt(&key, nonce_bytes, ciphertext) {
+        return Ok(plain);
+    }
+    let key = derive_key(password, salt, PBKDF2_ITERS_LEGACY);
+    aes_decrypt(&key, nonce_bytes, ciphertext)
 }
 
 fn aes_encrypt(key: &[u8; 32], nonce_bytes: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
@@ -1470,6 +1530,45 @@ mod tests {
         let a = encrypt_sync_password(SYNC_PW, MASTER_PW).unwrap();
         let b = encrypt_sync_password(SYNC_PW, MASTER_PW).unwrap();
         assert_ne!(a, b, "fresh salt+nonce per encryption");
+    }
+
+    // ── Field-level secret encryption (M2) ──
+
+    #[test]
+    fn secret_field_encrypt_decrypt_roundtrip() {
+        let secret = "kite_api_secret_xyz";
+        let enc = encrypt_secret_field(secret, MASTER_PW).unwrap();
+        assert!(is_secret_field_encrypted(&enc), "must carry the version prefix");
+        assert_ne!(enc, secret);
+        assert_eq!(decrypt_secret_field(&enc, MASTER_PW).unwrap(), secret);
+    }
+
+    #[test]
+    fn secret_field_decrypt_passes_through_legacy_plaintext() {
+        // A value written before M2 has no prefix — returned unchanged so
+        // existing installs keep working until the one-time upgrade rewrites it.
+        let legacy = "legacy_plaintext_key";
+        assert!(!is_secret_field_encrypted(legacy));
+        assert_eq!(decrypt_secret_field(legacy, MASTER_PW).unwrap(), legacy);
+    }
+
+    #[test]
+    fn secret_field_decrypt_fails_with_wrong_master() {
+        let enc = encrypt_secret_field("s3cr3t", MASTER_PW).unwrap();
+        assert!(decrypt_secret_field(&enc, "wrong-master").is_err());
+    }
+
+    #[test]
+    fn kdf_fallback_opens_legacy_cost_blob() {
+        // A blob written before M1 (100k iters) must still decrypt via the
+        // fallback, while new writes use the 600k cost.
+        let secret = b"legacy-cost-payload";
+        let salt = [7u8; SALT_LEN];
+        let nonce = [9u8; NONCE_LEN];
+        let legacy_key = derive_key(MASTER_PW, &salt, PBKDF2_ITERS_LEGACY);
+        let ct = aes_encrypt(&legacy_key, &nonce, secret).unwrap();
+        let plain = decrypt_with_kdf_fallback(MASTER_PW, &salt, &nonce, &ct).unwrap();
+        assert_eq!(plain, secret);
     }
 
     // ── .svbak byte format ──

@@ -1,6 +1,6 @@
 # Suvarix — End User License Agreement
 
-Last updated: 2026-07-05
+Last updated: 2026-07-15
 
 By installing or using Suvarix ("the App"), you agree to the terms below. If you do not agree, do not install or use the App.
 
@@ -10,7 +10,7 @@ You are granted a free, personal, non-exclusive license to install and use the A
 
 ## 2. Not Financial or Tax Advice
 
-Suvarix displays calculations such as capital gains (STCG/LTCG), net worth, and tax estimates for informational purposes only. These figures are indicative, may contain errors, and do not account for your full financial situation, surcharge, cess, or other income. **Nothing in the App constitutes financial, investment, tax, or legal advice.** Always verify figures independently and consult a qualified professional (e.g. a Chartered Accountant) before making financial or tax decisions.
+Suvarix displays calculations such as capital gains (STCG/LTCG), net worth, and tax estimates for informational purposes only. These figures are indicative, may contain errors, and do not account for your full financial situation, surcharge, cess, or other income. **Nothing in the App constitutes financial, investment, tax, or legal advice.** The developer is **not a SEBI-registered investment adviser or research analyst**, and the App does not provide personalised recommendations to buy, sell, or hold any security. Always verify figures independently and consult a qualified professional (e.g. a Chartered Accountant or a SEBI-registered adviser) before making financial or tax decisions.
 
 ## 3. Your Data, Your Responsibility
 

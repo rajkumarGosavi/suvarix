@@ -4,6 +4,7 @@ use rusqlite::Connection;
 use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use zeroize::Zeroizing;
 
 use crate::error::{AppError, Result};
 
@@ -14,8 +15,10 @@ pub struct DbPool {
     inner: Mutex<Option<Pool<SqliteConnectionManager>>>,
     /// Current master password, kept in memory only while unlocked — needed to
     /// ATTACH sibling SQLCipher databases (backup/restore) with the same key.
-    /// Cleared on lock().
-    password: Mutex<Option<String>>,
+    /// Wrapped in `Zeroizing` so the heap bytes are scrubbed whenever it's
+    /// dropped — on `lock()`, on overwrite (unlock/rekey), and on process exit
+    /// (L1) — instead of lingering in freed memory.
+    password: Mutex<Option<Zeroizing<String>>>,
 }
 
 /// Wraps the pool in `Arc` so the background reminder scheduler (a tokio task
@@ -57,7 +60,7 @@ impl DbPool {
             ensure_device_id(&conn)?;
         }
         *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
-        *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
+        *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(Zeroizing::new(password.to_string()));
         tracing::debug!("db initialized");
         Ok(())
     }
@@ -73,7 +76,8 @@ impl DbPool {
         self.password
             .lock()
             .map_err(|_| AppError::Database("password lock error".into()))?
-            .clone()
+            .as_ref()
+            .map(|p| p.to_string())
             .ok_or(AppError::AuthRequired)
     }
 
@@ -94,7 +98,7 @@ impl DbPool {
                 ensure_device_id(&conn)?;
             }
             *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
-            *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
+            *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(Zeroizing::new(password.to_string()));
             tracing::debug!("unlocked");
             return Ok(true);
         }
@@ -113,7 +117,7 @@ impl DbPool {
                         ensure_device_id(&conn)?;
                     }
                     *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(pool);
-                    *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(password.to_string());
+                    *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(Zeroizing::new(password.to_string()));
                     tracing::debug!("unlocked");
                     return Ok(true);
                 }
@@ -157,7 +161,7 @@ impl DbPool {
         // Step 2: rebuild pool so with_init uses new password (guard released above)
         let new_pool = build_pool(&self.db_path, new_password)?;
         *self.inner.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(new_pool);
-        *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(new_password.to_string());
+        *self.password.lock().map_err(|_| AppError::Database("lock error".into()))? = Some(Zeroizing::new(new_password.to_string()));
         tracing::debug!("rekeyed");
         Ok(())
     }

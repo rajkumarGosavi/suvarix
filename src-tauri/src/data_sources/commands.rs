@@ -1,6 +1,7 @@
 use tauri::State;
 
-use crate::db::DbState;
+use crate::backup::commands::{decrypt_secret_field, encrypt_secret_field, is_secret_field_encrypted};
+use crate::db::{DbPool, DbState};
 use crate::error::{AppError, Result};
 use crate::models::common::ImportResult;
 use super::angel_one;
@@ -100,6 +101,72 @@ pub struct SyncResult {
     pub errors: Vec<String>,
 }
 
+// ─── Broker credential encryption (M2) ───────────────────────
+
+/// `app_settings` keys holding sensitive broker credentials that get field-level
+/// AES-GCM encryption at rest (on top of SQLCipher), keyed by the master
+/// password. Dates (`*_token_date`) and the Angel client id stay plaintext —
+/// they're not secret and the status checks compare them directly, and keeping
+/// dates readable avoids decrypting just to test "is today's token still valid".
+const BROKER_SECRET_KEYS: &[&str] = &[
+    "zerodha_api_key",
+    "zerodha_api_secret",
+    "zerodha_access_token",
+    "upstox_api_key",
+    "upstox_api_secret",
+    "upstox_access_token",
+    "angel_api_key",
+    "angel_jwt_token",
+];
+
+const SETTING_BROKER_SECRETS_ENCRYPTED: &str = "broker_secrets_encrypted_v1";
+
+/// One-time-per-device pass, run right after unlock, that rewrites any legacy
+/// plaintext broker credential in `app_settings` as a field-encrypted blob (M2).
+/// Idempotent twice over: gated by a settings flag, and each value is skipped if
+/// it's already encrypted. Needs the master password, which is why it runs
+/// post-unlock (alongside `run_dedupe_once_on_unlock`) rather than as a schema
+/// migration — the DB is decryptable at migration time but the master password
+/// itself isn't available there. Returns whether it did any work.
+pub(crate) fn encrypt_broker_secrets_once(db: &DbPool) -> Result<bool> {
+    {
+        let conn = db.get()?;
+        let already: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key=?1",
+                [SETTING_BROKER_SECRETS_ENCRYPTED],
+                |r| r.get(0),
+            )
+            .ok();
+        if already.as_deref() == Some("true") {
+            return Ok(false);
+        }
+    }
+
+    let master = db.current_password()?;
+    let conn = db.get()?;
+    for &key in BROKER_SECRET_KEYS {
+        let existing: Option<String> = conn
+            .query_row("SELECT value FROM app_settings WHERE key=?1", [key], |r| r.get(0))
+            .ok();
+        if let Some(val) = existing {
+            if !val.is_empty() && !is_secret_field_encrypted(&val) {
+                let encrypted = encrypt_secret_field(&val, &master)?;
+                conn.execute(
+                    "UPDATE app_settings SET value=?1 WHERE key=?2",
+                    rusqlite::params![encrypted, key],
+                )?;
+            }
+        }
+    }
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?1, 'true')
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [SETTING_BROKER_SECRETS_ENCRYPTED],
+    )?;
+    Ok(true)
+}
+
 // ─── Config ──────────────────────────────────────────────────
 
 #[tauri::command]
@@ -108,16 +175,19 @@ pub fn save_zerodha_config(
     api_secret: String,
     state: State<DbState>,
 ) -> Result<()> {
+    let master = state.0.current_password()?;
+    let api_key_enc = encrypt_secret_field(&api_key, &master)?;
+    let api_secret_enc = encrypt_secret_field(&api_secret, &master)?;
     let conn = state.0.get()?;
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('zerodha_api_key', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [&api_key],
+        [&api_key_enc],
     )?;
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('zerodha_api_secret', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [&api_secret],
+        [&api_secret_enc],
     )?;
     Ok(())
 }
@@ -193,7 +263,8 @@ pub async fn start_zerodha_login(
     app: tauri::AppHandle,
     state: State<'_, DbState>,
 ) -> Result<()> {
-    // Read credentials (lock → read → release)
+    // Read credentials (lock → read → release), then decrypt (M2)
+    let master = state.0.current_password()?;
     let (api_key, api_secret) = {
         let conn = state.0.get()?;
 
@@ -213,11 +284,15 @@ pub async fn start_zerodha_login(
             )
             .map_err(|_| AppError::Validation("Zerodha API secret not configured".into()))?;
 
-        (api_key, api_secret)
+        (
+            decrypt_secret_field(&api_key, &master)?,
+            decrypt_secret_field(&api_secret, &master)?,
+        )
     };
 
     // Run OAuth flow — opens browser, waits for redirect, exchanges token
     let access_token = zerodha::run_oauth_flow(&api_key, &api_secret, &app).await?;
+    let access_token_enc = encrypt_secret_field(&access_token, &master)?;
 
     // Store access_token + today's date (lock → write → release)
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -227,7 +302,7 @@ pub async fn start_zerodha_login(
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('zerodha_access_token', ?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            [&access_token],
+            [&access_token_enc],
         )?;
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('zerodha_access_token_date', ?1)
@@ -243,7 +318,8 @@ pub async fn start_zerodha_login(
 
 #[tauri::command]
 pub async fn sync_zerodha_holdings(state: State<'_, DbState>) -> Result<SyncResult> {
-    // Read credentials (lock → read → release)
+    // Read credentials (lock → read → release), then decrypt (M2)
+    let master = state.0.current_password()?;
     let (api_key, access_token) = {
         let conn = state.0.get()?;
 
@@ -267,7 +343,10 @@ pub async fn sync_zerodha_holdings(state: State<'_, DbState>) -> Result<SyncResu
                 )
             })?;
 
-        (api_key, access_token)
+        (
+            decrypt_secret_field(&api_key, &master)?,
+            decrypt_secret_field(&access_token, &master)?,
+        )
     };
 
     // Fetch from Kite API (no lock held during HTTP)
@@ -302,16 +381,19 @@ pub fn save_upstox_config(
     api_secret: String,
     state: State<DbState>,
 ) -> Result<()> {
+    let master = state.0.current_password()?;
+    let api_key_enc = encrypt_secret_field(&api_key, &master)?;
+    let api_secret_enc = encrypt_secret_field(&api_secret, &master)?;
     let conn = state.0.get()?;
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('upstox_api_key', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [&api_key],
+        [&api_key_enc],
     )?;
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('upstox_api_secret', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [&api_secret],
+        [&api_secret_enc],
     )?;
     Ok(())
 }
@@ -364,7 +446,8 @@ pub async fn start_upstox_login(
     app: tauri::AppHandle,
     state: State<'_, DbState>,
 ) -> Result<()> {
-    // Read credentials (lock → read → release)
+    // Read credentials (lock → read → release), then decrypt (M2)
+    let master = state.0.current_password()?;
     let (api_key, api_secret) = {
         let conn = state.0.get()?;
         let api_key = conn
@@ -381,11 +464,15 @@ pub async fn start_upstox_login(
                 |r| r.get::<_, String>(0),
             )
             .map_err(|_| AppError::Validation("Upstox API secret not configured".into()))?;
-        (api_key, api_secret)
+        (
+            decrypt_secret_field(&api_key, &master)?,
+            decrypt_secret_field(&api_secret, &master)?,
+        )
     };
 
     // Run OAuth flow — opens browser, waits for redirect, exchanges token
     let access_token = upstox::run_oauth_flow(&api_key, &api_secret, &app).await?;
+    let access_token_enc = encrypt_secret_field(&access_token, &master)?;
 
     // Store token + today's date (lock → write → release)
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -394,7 +481,7 @@ pub async fn start_upstox_login(
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('upstox_access_token', ?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            [&access_token],
+            [&access_token_enc],
         )?;
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('upstox_token_date', ?1)
@@ -408,7 +495,8 @@ pub async fn start_upstox_login(
 
 #[tauri::command]
 pub async fn sync_upstox_holdings(state: State<'_, DbState>) -> Result<SyncResult> {
-    // Read credentials (lock → read → release)
+    // Read credentials (lock → read → release), then decrypt (M2)
+    let master = state.0.current_password()?;
     let (api_key, access_token) = {
         let conn = state.0.get()?;
         let api_key = conn
@@ -425,7 +513,10 @@ pub async fn sync_upstox_holdings(state: State<'_, DbState>) -> Result<SyncResul
                 |r| r.get::<_, String>(0),
             )
             .map_err(|_| AppError::Validation("Not connected to Upstox. Please reconnect.".into()))?;
-        (api_key, access_token)
+        (
+            decrypt_secret_field(&api_key, &master)?,
+            decrypt_secret_field(&access_token, &master)?,
+        )
     };
 
     // Fetch from Upstox API (no lock held during HTTP)
@@ -475,12 +566,15 @@ pub fn save_angel_config(
     client_id: String,
     state: State<DbState>,
 ) -> Result<()> {
+    let master = state.0.current_password()?;
+    let api_key_enc = encrypt_secret_field(&api_key, &master)?;
     let conn = state.0.get()?;
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('angel_api_key', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        [&api_key],
+        [&api_key_enc],
     )?;
+    // client_id is the user's Angel login id, not a secret — kept plaintext.
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('angel_client_id', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -538,7 +632,9 @@ pub async fn login_angel(
     totp: String,
     state: State<'_, DbState>,
 ) -> Result<()> {
-    // Read credentials (lock → read → release)
+    // Read credentials (lock → read → release); api_key is encrypted (M2),
+    // client_id is plaintext.
+    let master = state.0.current_password()?;
     let (api_key, client_id) = {
         let conn = state.0.get()?;
         let api_key = conn
@@ -555,11 +651,12 @@ pub async fn login_angel(
                 |r| r.get::<_, String>(0),
             )
             .map_err(|_| AppError::Validation("Angel One client ID not configured".into()))?;
-        (api_key, client_id)
+        (decrypt_secret_field(&api_key, &master)?, client_id)
     };
 
     // Login via SmartAPI (no lock held during HTTP)
     let jwt_token = angel_one::login(&api_key, &client_id, &password, &totp).await?;
+    let jwt_token_enc = encrypt_secret_field(&jwt_token, &master)?;
 
     // Store JWT + today's date (lock → write → release)
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -568,7 +665,7 @@ pub async fn login_angel(
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('angel_jwt_token', ?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            [&jwt_token],
+            [&jwt_token_enc],
         )?;
         conn.execute(
             "INSERT INTO app_settings (key, value) VALUES ('angel_token_date', ?1)
@@ -582,7 +679,8 @@ pub async fn login_angel(
 
 #[tauri::command]
 pub async fn sync_angel_holdings(state: State<'_, DbState>) -> Result<SyncResult> {
-    // Read credentials (lock → read → release)
+    // Read credentials (lock → read → release), then decrypt (M2)
+    let master = state.0.current_password()?;
     let (api_key, jwt_token) = {
         let conn = state.0.get()?;
         let api_key = conn
@@ -601,7 +699,10 @@ pub async fn sync_angel_holdings(state: State<'_, DbState>) -> Result<SyncResult
             .map_err(|_| {
                 AppError::Validation("Not connected to Angel One. Please login again.".into())
             })?;
-        (api_key, jwt_token)
+        (
+            decrypt_secret_field(&api_key, &master)?,
+            decrypt_secret_field(&jwt_token, &master)?,
+        )
     };
 
     // Fetch holdings (no lock held during HTTP)

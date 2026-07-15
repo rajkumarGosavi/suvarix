@@ -12,12 +12,17 @@ A privacy-first, offline-first desktop app for Indian investors. Track all your 
 
 ## Installation
 
-1. Download the latest `Suvarix_x64-setup.exe` from the link shared with you.
-2. Double-click the installer.
-3. If Windows shows a blue **"Windows protected your PC"** warning, click **More info → Run anyway**. This appears because the app is unsigned (normal for personal/beta software).
-4. Follow the installer steps. Suvarix installs to `%LOCALAPPDATA%\Suvarix`.
+Download the build for your OS from the **[latest release](https://github.com/rajkumarGosavi/suvarix/releases/latest)** (or the [download page](https://rajkumargosavi.github.io/suvarix/)): Windows `.msi`, macOS `.dmg`, Linux `.AppImage`/`.deb`, or Android `.apk`.
 
-After install, Suvarix checks for updates automatically and prompts you to install new versions in-app — no need to re-download the installer.
+Suvarix isn't OS-code-signed yet, so the first launch shows an "unknown publisher" warning (a reputation prompt, not a virus detection):
+
+- **Windows:** on the **"Windows protected your PC"** dialog click **More info → Run anyway**.
+- **macOS:** right-click the app → **Open** → **Open**. If it says "damaged", run once: `xattr -dr com.apple.quarantine /Applications/Suvarix.app`.
+- **Linux (.AppImage):** `chmod +x Suvarix_*.AppImage`, then run.
+
+After install, Suvarix checks for updates automatically and prompts you to install new versions in-app (each verified before applying) — no need to re-download.
+
+**New to Suvarix?** The **[full User Guide](USER_GUIDE.md)** walks through every feature; the [first-10-minutes](USER_GUIDE.md#your-first-10-minutes) section gets you productive fast.
 
 ---
 
@@ -304,8 +309,23 @@ Suvarix records usage events, errors, and page load times locally — nothing is
 
 - All data is stored in a local SQLite database on your device, encrypted at rest with SQLCipher (AES-256). Your master password is the encryption key.
 - No data is ever sent to any server or cloud service run by Suvarix. Optional Auto Sync only writes an encrypted snapshot file into a folder *you* control and sync with your own cloud provider.
-- Broker API credentials are stored only in your local database, protected by the same SQLCipher at-rest encryption as everything else. Note: if you enable Auto Sync, broker API keys are included in the encrypted `.svbak` snapshot.
+- Broker API credentials are stored only in your local database, with an **additional field-level AES-256-GCM layer** (keyed by your master password) on top of the SQLCipher at-rest encryption. They are **excluded from the `.svbak` sync snapshot**, so you re-enter them once per device.
 - Diagnostic data (if you choose to export and share it) is entirely under your control.
+
+---
+
+## Uninstall
+
+Uninstalling removes the app but **not** your data — your database, backups, and `.svbak` sync files stay until you delete them. (To erase in-app data first: **Settings → Data Management → Wipe All Data**.)
+
+| OS | Uninstall | Then optionally delete |
+|---|---|---|
+| Windows | Settings → Apps → *Suvarix* → Uninstall | `%APPDATA%\com.rajkumar.suvarix\` |
+| macOS | Drag **Suvarix.app** to Trash | `~/Library/Application Support/com.rajkumar.suvarix/` |
+| Linux | `sudo apt remove suvarix` or delete the `.AppImage` | `~/.local/share/com.rajkumar.suvarix/` |
+| Android | Long-press icon → Uninstall | — |
+
+The exact path is shown at **Settings → About → Data directory**. See the [User Guide](USER_GUIDE.md#13-uninstall) for detail.
 
 ---
 

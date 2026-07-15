@@ -64,7 +64,7 @@ Modules map 1:1 to domains:
 | Module | Responsibility |
 |---|---|
 | `db` | `DbPool` — r2d2 pool (max 4, WAL) over SQLCipher DB; master password is the `PRAGMA key`. Pool is `None` until unlock → commands return `AppError::AuthRequired`. Migrations MIGRATION_001–017 (MIGRATION_014 behind `gamification` feature flag; 010 and 016 are non-idempotent ALTER TABLEs run with errors ignored) |
-| `auth` | Thin commands over `DbPool`: setup/unlock/verify/rekey. No separate password hash — password correct ⇔ DB opens. Legacy keyring device-key → passphrase migration (removable after v0.6). NOTE: broker creds are stored plaintext in `app_settings` (protected by SQLCipher at-rest encryption only — no extra AES-GCM layer; see SECURITY_AUDIT.md M2) |
+| `auth` | Thin commands over `DbPool`: setup/unlock/verify/rekey. No separate password hash — password correct ⇔ DB opens. Legacy keyring device-key → passphrase migration (removable after v0.6). Broker creds (API keys/secrets/tokens) get field-level AES-256-GCM at rest keyed by the master password (`data_sources::commands::BROKER_SECRET_KEYS`, `backup::commands::{encrypt,decrypt}_secret_field`), on top of SQLCipher; upgraded from legacy plaintext by a one-time-on-unlock pass (`encrypt_broker_secrets_once`). Because they're master-password-keyed they are excluded from `SYNC_SETTINGS_KEYS` (not synced cross-device). See SECURITY_AUDIT.md M2 |
 | `categories` | Shared, user-managed category list (CRUD) backing transactions/budgets/recurring transactions |
 | `portfolio` | CRUD for 9 asset types + net worth / allocation aggregates |
 | `transactions` | Income/expense ledger; CSV import, datetime support, paginated search/sort |
@@ -99,4 +99,4 @@ PrimeVue theming via `@primeuix/themes`. Hover states use `color-mix()` pattern 
 
 ### Broker OAuth
 
-Zerodha starts local HTTP server on port 7459 with 3-min timeout for OAuth callback (no `state` param — see SECURITY_AUDIT.md H2). Credentials stored in SQLCipher-encrypted SQLite, never sent anywhere except the broker's own API.
+Zerodha starts local HTTP server on port 7459 with 3-min timeout for OAuth callback; a random `state` is carried via Kite `redirect_params` (Upstox uses the standard OAuth2 `state` on port 7460) and verified on the callback to prevent local login-CSRF (SECURITY_AUDIT.md H2, fixed). Credentials stored in SQLCipher-encrypted SQLite, never sent anywhere except the broker's own API.

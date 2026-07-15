@@ -35,9 +35,9 @@ impl From<UpstoxHolding> for BrokerHolding {
     }
 }
 
-/// Extract the `code` query param from a raw HTTP GET request line.
-fn extract_code(http_request: &str) -> Option<String> {
-    // First line: GET /?code=xxx HTTP/1.1
+/// Extract a single query param's value from a raw HTTP GET request line.
+/// First line: `GET /?code=xxx&state=yyy HTTP/1.1`
+fn extract_query_param(http_request: &str, name: &str) -> Option<String> {
     let first_line = http_request.lines().next()?;
     let query_start = first_line.find('?')?;
     let path_end = first_line.rfind(' ')?;
@@ -45,12 +45,21 @@ fn extract_code(http_request: &str) -> Option<String> {
         return None;
     }
     let query = &first_line[query_start + 1..path_end];
+    let prefix = format!("{name}=");
     for param in query.split('&') {
-        if let Some(value) = param.strip_prefix("code=") {
+        if let Some(value) = param.strip_prefix(&prefix) {
             return Some(value.to_string());
         }
     }
     None
+}
+
+/// Random 128-bit CSRF `state`, hex-encoded — sent as the OAuth2 `state`
+/// parameter and verified on the callback so a local process can't race the
+/// loopback port with a forged `code` (H2).
+fn random_state() -> String {
+    let bytes: [u8; 16] = rand::random();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// OAuth2 flow: open browser → wait for redirect on port 7460 → exchange code for token.
@@ -70,8 +79,9 @@ pub async fn run_oauth_flow(
         })?;
 
     let redirect_uri = format!("http://127.0.0.1:{CALLBACK_PORT}");
+    let state = random_state();
     let login_url = format!(
-        "{UPSTOX_BASE}/login/authorization/dialog?client_id={api_key}&redirect_uri={redirect_uri}&response_type=code"
+        "{UPSTOX_BASE}/login/authorization/dialog?client_id={api_key}&redirect_uri={redirect_uri}&response_type=code&state={state}"
     );
     app.opener()
         .open_url(&login_url, None::<&str>)
@@ -104,7 +114,16 @@ pub async fn run_oauth_flow(
     );
     let _ = stream.write_all(success_html.as_bytes()).await;
 
-    let code = extract_code(&request_str).ok_or_else(|| {
+    // Reject callbacks whose `state` doesn't match — defeats a local process
+    // racing the loopback port with a forged authorization code (H2).
+    let returned_state = extract_query_param(&request_str, "state");
+    if returned_state.as_deref() != Some(state.as_str()) {
+        return Err(AppError::ExternalApi(
+            "Login rejected: OAuth state mismatch (possible CSRF). Please try again.".into(),
+        ));
+    }
+
+    let code = extract_query_param(&request_str, "code").ok_or_else(|| {
         AppError::ExternalApi(
             "Upstox did not return a code. Check that your redirect URL is set to http://127.0.0.1:7460".into(),
         )

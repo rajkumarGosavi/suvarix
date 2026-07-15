@@ -18,6 +18,7 @@ Suvarix is a privacy-first personal finance desktop app for Indian investors. Al
 10. [Reports](#10-reports)
 11. [Settings](#11-settings)
 12. [Security & Privacy](#12-security--privacy)
+13. [Uninstall](#13-uninstall)
 
 ---
 
@@ -25,11 +26,37 @@ Suvarix is a privacy-first personal finance desktop app for Indian investors. Al
 
 ### Installation
 
-1. Download the latest `Suvarix_x64-setup.exe` from the link shared with you.
-2. Double-click the installer and follow the steps.
-3. If Windows shows a blue **"Windows protected your PC"** warning, click **More info → Run anyway**. This is expected for unsigned personal software.
+Download the build for your OS from the **[latest release](https://github.com/rajkumarGosavi/suvarix/releases/latest)**:
 
-Suvarix checks for updates automatically and offers to install new versions in-app.
+| Platform | File |
+|---|---|
+| Windows 10/11 | `.msi` installer |
+| macOS (Apple Silicon / Intel) | `.dmg` |
+| Linux | `.AppImage` or `.deb` |
+| Android | `.apk` (sideload) |
+
+Suvarix isn't OS-code-signed yet, so the first launch shows an "unknown
+publisher" warning. It's a *reputation* prompt, **not** a virus detection.
+
+- **Windows:** on the **"Windows protected your PC"** dialog click **More info → Run anyway**.
+- **macOS:** because the app isn't notarized yet, right-click the app → **Open** → **Open**. If macOS says it's "damaged", run once in Terminal: `xattr -dr com.apple.quarantine /Applications/Suvarix.app`.
+- **Linux (.AppImage):** `chmod +x Suvarix_*.AppImage`, then run it.
+
+Suvarix checks for updates automatically and offers to install new versions
+in-app — every update is cryptographically verified before it's applied, so you
+won't re-download installers.
+
+### Your first 10 minutes
+
+A quick path to get value fast:
+
+1. **Add one real holding** — Portfolio → Equity (or MF/FD) → add manually. Watch it appear on the Dashboard net-worth tile.
+2. **Connect a broker or import a file** — Data Sources → Zerodha/Upstox/Angel One, or import an MF Central CAS PDF / Groww CSV.
+3. **Log income + a few expenses** — Transactions → Add (or bulk-import a CSV). This powers your savings rate and health score.
+4. **Add liabilities** — Liabilities → add a loan (full EMI schedule) or credit card.
+5. **Set one goal** — Goals → Add Goal (e.g. emergency fund).
+6. **Check your Financial Health Score** on the Dashboard and do its single "Do this next" step.
+7. **Turn on backups** — Settings → Data Management → Backup now, and consider Auto Sync into your cloud folder.
 
 ### First Launch — Set Master Password
 
@@ -485,7 +512,10 @@ Automatically import your Zerodha equity holdings. Requires a free personal Kite
 5. In Suvarix → Data Sources → Zerodha: paste both and click **Save & Connect**.
 6. Your browser opens the Zerodha login page — log in. The app captures the token automatically and shows "Connected".
 
-> The API key and secret are stored only in your local database. They never leave your device.
+> The API key and secret are stored only in your local database, with an **extra
+> AES-256-GCM layer** (keyed by your master password) on top of the database
+> encryption. They never leave your device and are **not** included in sync files
+> — you enter them once per device.
 
 #### Daily Reconnect
 
@@ -738,7 +768,7 @@ Click **Restore** to replace all current data with a previously saved backup.
 
 #### Sync Backup (manual, cross-device)
 
-Exports/imports a password-encrypted **`.svbak` snapshot** — a portable copy of all financial data (holdings, transactions, goals, reminders, budgets, broker API keys) for moving between devices. Not the same as Backup Database (raw `.db` copy).
+Exports/imports a password-encrypted **`.svbak` snapshot** — a portable copy of your financial data (holdings, transactions, goals, reminders, budgets) for moving between devices. Not the same as Backup Database (raw `.db` copy). **Broker API keys are deliberately excluded** from the snapshot for security — re-enter them once on each device.
 
 - **Export:** click **Export Sync Backup**, choose a location, set a **sync password** (independent of your master password).
 - **Import:** click **Import Sync Backup**, pick the `.svbak` file, enter its sync password. **This replaces ALL financial data on the device**; your master password is unchanged.
@@ -802,7 +832,15 @@ All data is stored in a single SQLite database file on your computer, **encrypte
 
 ### Master Password
 
-Your master password **is the database encryption key** — the database file cannot be opened without it. It is required every time you open the app and after an auto-lock timeout. It is never stored anywhere (in any form) or transmitted; changing it re-encrypts the database with the new key.
+Your master password **is the database encryption key** — the database file cannot be opened without it. It is required every time you open the app and after an auto-lock timeout. It is never stored anywhere (in any form) or transmitted; changing it re-encrypts the database with the new key. While the app is unlocked the password is held in memory only, and its bytes are scrubbed when you lock or quit.
+
+### Broker Credentials
+
+Broker API keys, secrets, and session tokens receive an **additional field-level
+AES-256-GCM layer**, keyed by your master password, on top of the database's
+SQLCipher encryption. They are sent only to the respective broker's own API
+(never to the developer) and are **excluded from sync files**, so you re-enter
+them once on each device.
 
 ### Database Location
 
@@ -820,6 +858,26 @@ Suvarix does not automatically back up your data. Set a reminder to use **Settin
 - After adding new holdings
 - Before and after app updates
 - Monthly as a routine habit
+
+---
+
+## 13. Uninstall
+
+Uninstalling removes the application. **Your database, backups, and `.svbak` sync
+files are not deleted by the uninstaller** — delete them yourself for a clean
+wipe. (To erase data *inside* the app first, use **Settings → Data Management →
+Wipe All Data**.)
+
+| OS | Uninstall | Then optionally delete |
+|---|---|---|
+| Windows | Settings → Apps → *Suvarix* → Uninstall | `%APPDATA%\com.rajkumar.suvarix\` |
+| macOS | Drag **Suvarix.app** to the Trash | `~/Library/Application Support/com.rajkumar.suvarix/` |
+| Linux | Remove the `.deb` (`sudo apt remove suvarix`) or delete the `.AppImage` | `~/.local/share/com.rajkumar.suvarix/` |
+| Android | Long-press the app icon → Uninstall | — |
+
+The exact data-directory path for your install is shown at **Settings → About →
+Data directory**. Any `.svbak` files you placed in a cloud folder remain until you
+delete them there.
 
 ---
 

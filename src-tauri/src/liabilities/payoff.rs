@@ -173,7 +173,7 @@ pub fn build_plan(debts: &[Debt], strategy: &str, extra: f64) -> DebtPlan {
     let (months, interest, payoff) = simulate(debts, strategy, extra, true);
     let (base_months, base_interest, _) = simulate(debts, strategy, 0.0, false);
 
-    let never_clears = payoff.iter().any(|m| *m == 0) && !debts.is_empty();
+    let never_clears = payoff.contains(&0) && !debts.is_empty();
 
     let steps = debts
         .iter()

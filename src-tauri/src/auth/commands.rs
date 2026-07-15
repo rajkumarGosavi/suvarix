@@ -46,6 +46,14 @@ pub fn verify_master_password(
             Ok(None) => tracing::debug!("one-time duplicate cleanup already applied, skipped"),
             Err(e) => tracing::warn!("one-time duplicate cleanup failed: {e}"),
         }
+        // One-time-per-device upgrade of any legacy plaintext broker credential
+        // to field-level encryption at rest (M2). Runs while unlocked so the
+        // master password is available; idempotent after the first success.
+        match crate::data_sources::commands::encrypt_broker_secrets_once(&state.0) {
+            Ok(true) => tracing::debug!("broker credentials encrypted at rest (M2 upgrade)"),
+            Ok(false) => tracing::debug!("broker credential encryption already applied, skipped"),
+            Err(e) => tracing::warn!("broker credential encryption failed: {e}"),
+        }
         scheduler.start(app.clone(), state.0.clone());
         sync_scheduler.start(app, state.0.clone());
         tracing::debug!("reminder + sync schedulers started");

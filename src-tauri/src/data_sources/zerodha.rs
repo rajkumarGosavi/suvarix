@@ -1,3 +1,4 @@
+use rand::random;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -41,8 +42,9 @@ fn compute_checksum(api_key: &str, request_token: &str, api_secret: &str) -> Str
     hex::encode(hasher.finalize())
 }
 
-fn extract_request_token(http_request: &str) -> Option<String> {
-    // First line looks like: GET /callback?request_token=xxx&status=success HTTP/1.1
+/// Pulls a single query-string parameter's value out of the raw HTTP GET line.
+/// First line looks like: `GET /?request_token=xxx&status=success&state=yyy HTTP/1.1`
+fn extract_query_param(http_request: &str, name: &str) -> Option<String> {
     let first_line = http_request.lines().next()?;
     let query_start = first_line.find('?')?;
     let path_end = first_line.rfind(' ')?;
@@ -50,12 +52,22 @@ fn extract_request_token(http_request: &str) -> Option<String> {
         return None;
     }
     let query = &first_line[query_start + 1..path_end];
+    let prefix = format!("{name}=");
     for param in query.split('&') {
-        if let Some(value) = param.strip_prefix("request_token=") {
+        if let Some(value) = param.strip_prefix(&prefix) {
             return Some(value.to_string());
         }
     }
     None
+}
+
+/// Random 128-bit CSRF `state`, hex-encoded. Passed to Kite via `redirect_params`
+/// and echoed back on the callback; a callback whose `state` doesn't match is
+/// rejected, so a local process racing the loopback port with a forged
+/// `request_token` can't bind this app to an attacker's Zerodha account (H2).
+fn random_state() -> String {
+    let bytes: [u8; 16] = random();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Start local TCP server on port 7459, open Kite login in browser, wait for the OAuth
@@ -75,8 +87,11 @@ pub async fn run_oauth_flow(
             ))
         })?;
 
+    // `redirect_params` is echoed back appended to the callback URL by Kite, so
+    // we ferry a random `state` through it and verify it below (H2 / CSRF).
+    let state = random_state();
     let login_url = format!(
-        "https://kite.zerodha.com/connect/login?api_key={api_key}&v=3"
+        "https://kite.zerodha.com/connect/login?api_key={api_key}&v=3&redirect_params=state={state}"
     );
     app.opener()
         .open_url(&login_url, None::<&str>)
@@ -108,7 +123,16 @@ pub async fn run_oauth_flow(
     let _ = stream.write_all(success_html.as_bytes()).await;
 
 
-    let request_token = extract_request_token(&request_str)
+    // Reject callbacks whose `state` doesn't match the one we just sent —
+    // defeats a local process racing the loopback port with a forged token (H2).
+    let returned_state = extract_query_param(&request_str, "state");
+    if returned_state.as_deref() != Some(state.as_str()) {
+        return Err(AppError::ExternalApi(
+            "Login rejected: OAuth state mismatch (possible CSRF). Please try again.".into(),
+        ));
+    }
+
+    let request_token = extract_query_param(&request_str, "request_token")
         .ok_or_else(|| AppError::ExternalApi("Zerodha did not return a request_token. Check that your redirect URL is set to http://127.0.0.1:7459".into()))?;
 
     let checksum = compute_checksum(api_key, &request_token, api_secret);
