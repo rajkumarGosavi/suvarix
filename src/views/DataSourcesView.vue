@@ -35,7 +35,7 @@ const upstoxApiSecret = ref("");
 
 async function saveAndConnectUpstox() {
     try {
-        await upstox.saveConfig(upstoxApiKey.value.trim(), upstoxApiSecret.value.trim());
+        await upstox.saveConfig({ apiKey: upstoxApiKey.value.trim(), apiSecret: upstoxApiSecret.value.trim() });
         upstoxApiSecret.value = "";
         await upstox.connect();
     } catch {
@@ -51,7 +51,7 @@ const angelTotp = ref("");
 
 async function saveAngelConfig() {
     try {
-        await angelOne.saveConfig(angelApiKey.value.trim(), angelClientId.value.trim());
+        await angelOne.saveConfig({ apiKey: angelApiKey.value.trim(), clientId: angelClientId.value.trim() });
     } catch {
         // error shown via angelOne.error
     }
@@ -59,7 +59,7 @@ async function saveAngelConfig() {
 
 async function loginAngel() {
     try {
-        await angelOne.login(angelPassword.value, angelTotp.value.trim());
+        await angelOne.connect({ password: angelPassword.value, totp: angelTotp.value.trim() });
         angelPassword.value = "";
         angelTotp.value = "";
     } catch {
@@ -421,7 +421,7 @@ async function importTxnCsv() {
 
 async function saveAndConnect() {
     try {
-        await zerodha.saveConfig(apiKeyInput.value.trim(), apiSecretInput.value.trim());
+        await zerodha.saveConfig({ apiKey: apiKeyInput.value.trim(), apiSecret: apiSecretInput.value.trim() });
         apiSecretInput.value = "";
         await zerodha.connect();
     } catch {
@@ -999,7 +999,7 @@ function formatTime(iso: string | null): string {
                         <Button
                             label="Login"
                             icon="pi pi-sign-in"
-                            :loading="angelOne.loginLoading"
+                            :loading="angelOne.connectLoading"
                             :disabled="!angelPassword || !angelTotp.trim()"
                             @click="loginAngel"
                         />
