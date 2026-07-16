@@ -19,8 +19,8 @@ fn full_setup_unlock_rekey_lock_lifecycle() {
 
     // A fresh DbPool bound to the same path simulates app restart before unlock.
     let pool = DbPool::new(db_path.clone());
-    assert_eq!(pool.unlock("wrong-password").unwrap(), false, "wrong password must not unlock");
-    assert_eq!(pool.unlock("correct-horse-battery").unwrap(), true, "correct password must unlock");
+    assert!(!pool.unlock("wrong-password").unwrap(), "wrong password must not unlock");
+    assert!(pool.unlock("correct-horse-battery").unwrap(), "correct password must unlock");
     assert!(pool.verify_password("correct-horse-battery").unwrap());
     assert!(!pool.verify_password("wrong-password").unwrap());
 
@@ -28,8 +28,8 @@ fn full_setup_unlock_rekey_lock_lifecycle() {
 
     // Verify the on-disk key actually changed by reopening from scratch.
     let pool = DbPool::new(db_path.clone());
-    assert_eq!(pool.unlock("correct-horse-battery").unwrap(), false, "old password must fail after rekey");
-    assert_eq!(pool.unlock("new-passphrase").unwrap(), true, "new password must unlock after rekey");
+    assert!(!pool.unlock("correct-horse-battery").unwrap(), "old password must fail after rekey");
+    assert!(pool.unlock("new-passphrase").unwrap(), "new password must unlock after rekey");
 
     pool.lock();
     let err = pool.get().expect_err("locked pool must reject checkout");

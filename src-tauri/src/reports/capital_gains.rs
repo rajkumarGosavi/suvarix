@@ -200,6 +200,7 @@ mod tests {
     use super::*;
     use crate::test_utils::test_db_pool;
 
+    #[allow(clippy::too_many_arguments)]
     fn insert_txn(
         conn: &Connection,
         date: &str,

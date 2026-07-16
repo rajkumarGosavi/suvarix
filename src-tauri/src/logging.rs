@@ -10,6 +10,7 @@
 //! dev`'s terminal). Android: bridged to logcat via `paranoid-android` (NDK
 //! `__android_log_write`), viewable with `adb logcat -s suvarix`.
 
+#[cfg(target_os = "android")]
 const LOG_TAG: &str = "suvarix";
 
 fn max_level() -> tracing::Level {

@@ -241,7 +241,7 @@ pub fn compute_nudges(conn: &Connection) -> Vec<Nudge> {
     nudges.extend(pillar_nudges(conn));
     nudges.extend(maturity_nudges(conn));
     nudges.extend(networth_high_nudge(conn));
-    nudges.sort_by(|a, b| b.priority.cmp(&a.priority));
+    nudges.sort_by_key(|n| std::cmp::Reverse(n.priority));
     nudges
 }
 

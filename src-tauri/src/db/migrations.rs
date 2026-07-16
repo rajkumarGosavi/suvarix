@@ -334,81 +334,6 @@ fn hlc_expr() -> String {
         .to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_utils::test_db_pool;
-
-    #[test]
-    fn run_migrations_is_idempotent_when_rerun_on_same_connection() {
-        // test_db_pool() already runs migrations once via DbPool::initialize.
-        let (_dir, pool) = test_db_pool();
-        let conn = pool.get().unwrap();
-
-        // Re-running against the same already-migrated connection must not error,
-        // despite MIGRATION_010's non-idempotent ALTER TABLE (swallowed internally)
-        // and MIGRATION_012's conditional CHECK-constraint relaxation.
-        run_migrations(&conn).expect("second run_migrations call should be a no-op, not an error");
-
-        let table_count: i64 = conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
-             ('accounts','equity_holdings','mf_holdings','transactions','loans','app_settings')",
-            [],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(table_count, 6, "core tables should still exist after a second migration run");
-
-        // app_settings seed rows must not be duplicated (INSERT OR IGNORE / PRIMARY KEY on `key`)
-        let settings_count: i64 = conn.query_row(
-            "SELECT count(*) FROM app_settings WHERE key = 'currency'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
-        assert_eq!(settings_count, 1);
-    }
-
-    #[test]
-    fn migration_015_seeds_defaults_and_backfills_existing_data() {
-        let (_dir, pool) = test_db_pool();
-        let conn = pool.get().unwrap();
-
-        // Simulate a pre-existing/imported transaction using a category NOT in the
-        // hardcoded default list — this must survive migration as a real category row.
-        conn.execute(
-            "INSERT INTO transactions (date, type, amount, category) VALUES ('2026-01-01','expense',10,'Consulting Fees')",
-            [],
-        ).unwrap();
-
-        run_migrations(&conn).expect("re-running migrations after seeding data should succeed");
-
-        let default_count: i64 = conn.query_row(
-            "SELECT count(*) FROM categories WHERE name = 'Food'", [], |r| r.get(0),
-        ).unwrap();
-        assert_eq!(default_count, 1, "hardcoded default categories should be seeded");
-
-        let backfilled_count: i64 = conn.query_row(
-            "SELECT count(*) FROM categories WHERE name = 'Consulting Fees'", [], |r| r.get(0),
-        ).unwrap();
-        assert_eq!(backfilled_count, 1, "pre-existing/imported category text must be backfilled, not dropped");
-    }
-
-    #[test]
-    fn migration_016_adds_tag_column_idempotently() {
-        let (_dir, pool) = test_db_pool();
-        let conn = pool.get().unwrap();
-
-        // First run already happened via test_db_pool(); running again must not error
-        // even though ALTER TABLE ADD COLUMN fails on a column that already exists.
-        run_migrations(&conn).expect("second run_migrations call should be a no-op, not an error");
-        run_migrations(&conn).expect("third run_migrations call should also be a no-op");
-
-        conn.execute(
-            "INSERT INTO transactions (date, type, amount, tag) VALUES ('2026-01-01','expense',10,'House')",
-            [],
-        ).expect("tag column should exist and accept values");
-    }
-}
-
 const MIGRATION_001: &str = "
 CREATE TABLE IF NOT EXISTS accounts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -930,3 +855,78 @@ CREATE INDEX IF NOT EXISTS idx_txn_account_date
 CREATE INDEX IF NOT EXISTS idx_sip_active
     ON sip_schedules(is_active, account_id);
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::test_db_pool;
+
+    #[test]
+    fn run_migrations_is_idempotent_when_rerun_on_same_connection() {
+        // test_db_pool() already runs migrations once via DbPool::initialize.
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        // Re-running against the same already-migrated connection must not error,
+        // despite MIGRATION_010's non-idempotent ALTER TABLE (swallowed internally)
+        // and MIGRATION_012's conditional CHECK-constraint relaxation.
+        run_migrations(&conn).expect("second run_migrations call should be a no-op, not an error");
+
+        let table_count: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
+             ('accounts','equity_holdings','mf_holdings','transactions','loans','app_settings')",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(table_count, 6, "core tables should still exist after a second migration run");
+
+        // app_settings seed rows must not be duplicated (INSERT OR IGNORE / PRIMARY KEY on `key`)
+        let settings_count: i64 = conn.query_row(
+            "SELECT count(*) FROM app_settings WHERE key = 'currency'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(settings_count, 1);
+    }
+
+    #[test]
+    fn migration_015_seeds_defaults_and_backfills_existing_data() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        // Simulate a pre-existing/imported transaction using a category NOT in the
+        // hardcoded default list — this must survive migration as a real category row.
+        conn.execute(
+            "INSERT INTO transactions (date, type, amount, category) VALUES ('2026-01-01','expense',10,'Consulting Fees')",
+            [],
+        ).unwrap();
+
+        run_migrations(&conn).expect("re-running migrations after seeding data should succeed");
+
+        let default_count: i64 = conn.query_row(
+            "SELECT count(*) FROM categories WHERE name = 'Food'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(default_count, 1, "hardcoded default categories should be seeded");
+
+        let backfilled_count: i64 = conn.query_row(
+            "SELECT count(*) FROM categories WHERE name = 'Consulting Fees'", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(backfilled_count, 1, "pre-existing/imported category text must be backfilled, not dropped");
+    }
+
+    #[test]
+    fn migration_016_adds_tag_column_idempotently() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        // First run already happened via test_db_pool(); running again must not error
+        // even though ALTER TABLE ADD COLUMN fails on a column that already exists.
+        run_migrations(&conn).expect("second run_migrations call should be a no-op, not an error");
+        run_migrations(&conn).expect("third run_migrations call should also be a no-op");
+
+        conn.execute(
+            "INSERT INTO transactions (date, type, amount, tag) VALUES ('2026-01-01','expense',10,'House')",
+            [],
+        ).expect("tag column should exist and accept values");
+    }
+}

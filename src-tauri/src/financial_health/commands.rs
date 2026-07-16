@@ -234,7 +234,7 @@ fn pillar_debt(conn: &Connection) -> Pillar {
         let ratio = total_emi / monthly_income;
         let s = scale(ratio, 0.50, 0.20);
         subs.push(s);
-        if worst.map_or(true, |(_, w)| s < w) {
+        if worst.is_none_or(|(_, w)| s < w) {
             worst = Some(("Reduce EMIs or prepay a loan to get EMIs under 20% of income", s));
         }
     }
@@ -243,7 +243,7 @@ fn pillar_debt(conn: &Connection) -> Pillar {
         let util = cc_balance / cc_limit;
         let s = scale(util, 0.90, 0.30);
         subs.push(s);
-        if worst.map_or(true, |(_, w)| s < w) {
+        if worst.is_none_or(|(_, w)| s < w) {
             worst = Some(("Pay down cards to keep utilisation below 30% of the limit", s));
         }
     }
@@ -577,7 +577,7 @@ fn compute_emergency_fund(conn: &Connection) -> EmergencyFund {
 /// Sets the emergency-fund goal (months of expenses). Clamped to 1–24.
 #[tauri::command]
 pub fn set_emergency_fund_target(months: f64, state: State<DbState>) -> Result<()> {
-    if !(months.is_finite() && months >= 1.0 && months <= 24.0) {
+    if !(months.is_finite() && (1.0..=24.0).contains(&months)) {
         return Err(AppError::Validation("target months must be between 1 and 24".into()));
     }
     let conn = state.0.get()?;
