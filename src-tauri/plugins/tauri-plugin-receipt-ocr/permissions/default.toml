@@ -1,0 +1,5 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Allows receipt scanning via camera/gallery capture and on-device OCR"
+permissions = ["allow-scan-receipt", "allow-is-supported"]

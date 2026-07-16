@@ -2,19 +2,24 @@
 import { onMounted, ref, reactive, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useConfirm } from "primevue/useconfirm";
+import { useToast } from "primevue/usetoast";
 import { useTransactionsStore } from "@/stores/transactions";
 import { useCategoriesStore } from "@/stores/categories";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { dateToStr, strToDateTime, dateTimeToStr } from "@/composables/useDateConvert";
 import { useGamificationSafe } from "@/composables/useGamification";
+import { useReceiptScan } from "@/composables/useReceiptScan";
+import { parseReceipt } from "@/utils/receiptParser";
 import CategoryManagerDialog from "@/components/CategoryManagerDialog.vue";
 
 const store = useTransactionsStore();
 const categoriesStore = useCategoriesStore();
 const router = useRouter();
 const confirm = useConfirm();
+const toast = useToast();
 const { formatINR } = useCurrencyFormat();
 const { awardXP, updateStreak } = useGamificationSafe();
+const { supported: scanSupported, scanning, probeSupport, scan } = useReceiptScan();
 
 const showDialog = ref(false);
 const showCategoryManager = ref(false);
@@ -57,6 +62,44 @@ function openAdd() {
     editItem.value = null;
     resetForm();
     showDialog.value = true;
+}
+
+// Android only (scanSupported): camera/gallery → on-device OCR → prefilled
+// Add dialog. Never auto-saves — user reviews and confirms via save().
+const scanMenu = ref();
+const scanMenuItems = [
+    { label: "Take photo", icon: "pi pi-camera", command: () => scanReceipt("camera") },
+    { label: "Choose from gallery", icon: "pi pi-image", command: () => scanReceipt("gallery") },
+];
+
+async function scanReceipt(source: "camera" | "gallery") {
+    try {
+        const result = await scan(source);
+        if (!result) return; // user cancelled
+        if (!result.fullText.trim()) {
+            toast.add({
+                severity: "warn",
+                summary: "No text found",
+                detail: "Couldn't read any text on that image — try a sharper photo or add manually.",
+                life: 4500,
+            });
+            return;
+        }
+        const parsed = parseReceipt(result.fullText, result.lines);
+        editItem.value = null;
+        resetForm();
+        Object.assign(form, {
+            date: parsed.date ?? new Date(),
+            type: "expense",
+            amount: parsed.amount ?? 0,
+            category: categoriesStore.names.includes(parsed.category) ? parsed.category : null,
+            description: parsed.merchant ?? "",
+            notes: "Scanned from receipt",
+        });
+        showDialog.value = true;
+    } catch (e) {
+        toast.add({ severity: "error", summary: "Receipt scan failed", detail: String(e), life: 5000 });
+    }
 }
 
 function openEdit(item: any) {
@@ -183,6 +226,7 @@ function formatDateTime(s: string) {
 onMounted(() => {
     fetchPage(0);
     categoriesStore.fetchCategories();
+    probeSupport();
 });
 </script>
 
@@ -198,6 +242,16 @@ onMounted(() => {
                     outlined
                     @click="router.push('/data-sources')"
                 />
+                <Button
+                    v-if="scanSupported"
+                    icon="pi pi-camera"
+                    label="Scan receipt"
+                    severity="secondary"
+                    outlined
+                    :loading="scanning"
+                    @click="scanMenu?.toggle($event)"
+                />
+                <Menu ref="scanMenu" :model="scanMenuItems" popup />
                 <Button icon="pi pi-plus" label="Add Transaction" @click="openAdd" />
             </div>
         </div>

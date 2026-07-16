@@ -4129,7 +4129,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "suvarix"
-version = "0.6.31"
+version = "0.6.32"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -4160,6 +4160,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-process",
+ "tauri-plugin-receipt-ocr",
  "tauri-plugin-updater",
  "tempfile",
  "thiserror 1.0.69",
@@ -4566,6 +4567,17 @@ checksum = "d55511a7bf6cd70c8767b02c97bf8134fa434daf3926cfc1be0a0f94132d165a"
 dependencies = [
  "tauri",
  "tauri-plugin",
+]
+
+[[package]]
+name = "tauri-plugin-receipt-ocr"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

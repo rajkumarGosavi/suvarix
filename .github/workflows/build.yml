@@ -204,6 +204,9 @@ jobs:
       - name: Generate Android project skeleton
         run: pnpm tauri android init
 
+      - name: Generate Suvarix app icons
+        run: pnpm tauri icon src-tauri/icons/icon.png
+
       - name: Set APK output file name
         run: |
           python3 - <<'PY'
@@ -277,6 +280,9 @@ jobs:
 
       - name: Generate Android project skeleton
         run: pnpm tauri android init
+
+      - name: Generate Suvarix app icons
+        run: pnpm tauri icon src-tauri/icons/icon.png
 
       - name: Decode signing keystore
         env:

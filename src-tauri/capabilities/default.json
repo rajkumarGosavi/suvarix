@@ -11,6 +11,7 @@
     "notification:default",
     "updater:default",
     "process:allow-restart",
-    "autostart:default"
+    "autostart:default",
+    "receipt-ocr:default"
   ]
 }

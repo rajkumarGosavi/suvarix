@@ -1,0 +1,23 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Package visibility for ACTION_IMAGE_CAPTURE on API 30+.
+         Deliberately NO CAMERA uses-permission: the system camera app takes the
+         photo, and declaring it would make the runtime grant mandatory. -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+    </queries>
+    <application>
+        <!-- Own subclass, not androidx FileProvider directly — avoids manifest-merger
+             conflict with the app's generated provider (merged by class name). -->
+        <provider
+            android:name="com.plugin.receiptocr.ReceiptOcrFileProvider"
+            android:authorities="${applicationId}.receiptocr.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/receipt_ocr_file_paths" />
+        </provider>
+    </application>
+</manifest>

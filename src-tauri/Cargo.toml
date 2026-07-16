@@ -1,6 +1,6 @@
 [package]
 name = "suvarix"
-version = "0.6.31"
+version = "0.6.32"
 description = "Suvarix — Personal Finance Tracker"
 authors = ["Rajkumar"]
 license = "LicenseRef-Proprietary"
@@ -22,6 +22,10 @@ tauri-plugin-notification = "2"
 tauri-plugin-updater  = "2"
 tauri-plugin-process  = "2"
 tauri-plugin-autostart    = "2"
+# Local plugin: Android receipt scan (camera/gallery + on-device ML Kit OCR).
+# Registered on all platforms — desktop stub answers is_supported=false so the
+# UI can gate the scan button without a separate platform-scoped capability.
+tauri-plugin-receipt-ocr  = { path = "plugins/tauri-plugin-receipt-ocr" }
 
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
