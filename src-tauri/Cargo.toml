@@ -1,6 +1,6 @@
 [package]
 name = "suvarix"
-version = "0.6.32"
+version = "0.6.33"
 description = "Suvarix — Personal Finance Tracker"
 authors = ["Rajkumar"]
 license = "LicenseRef-Proprietary"
@@ -53,6 +53,11 @@ rand        = "0.8"
 zeroize     = "1.7"
 hex         = "0.4"
 aes-gcm     = "0.10"
+
+# Single-instance guard is a desktop-only concern (mobile OSes already enforce
+# one process per app) — keep the dep off Android/iOS builds.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-android-fs = "28.4.0"

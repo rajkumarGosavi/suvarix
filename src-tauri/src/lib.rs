@@ -40,7 +40,22 @@ use notifications::scheduler::SchedulerState;
 pub fn run() {
     logging::init();
 
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Single-instance MUST be the first plugin registered: it grabs the lock
+    // before anything else spins up, so a second launch never gets its own DB
+    // pool / tray icon / reminder + sync schedulers. Instead the callback runs
+    // in the already-running process and just re-focuses the main window.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+    }));
+
+    let builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
