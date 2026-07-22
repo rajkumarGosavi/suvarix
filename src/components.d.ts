@@ -38,6 +38,7 @@ declare module 'vue' {
     InsightsFeed: typeof import('./components/InsightsFeed.vue')['default']
     InsurancePanel: typeof import('./components/portfolio/InsurancePanel.vue')['default']
     Logo: typeof import('./components/Logo.vue')['default']
+    Menu: typeof import('primevue/menu')['default']
     Message: typeof import('primevue/message')['default']
     MfPanel: typeof import('./components/portfolio/MfPanel.vue')['default']
     Paginator: typeof import('primevue/paginator')['default']

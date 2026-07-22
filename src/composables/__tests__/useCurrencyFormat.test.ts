@@ -1,8 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
+import { useUiStore } from "@/stores/ui";
 
 describe("useCurrencyFormat", () => {
-  const { formatINR, formatChange, formatCompact, formatPercent } = useCurrencyFormat();
+  let formatINR: (v: number) => string;
+  let formatChange: (v: number) => string;
+  let formatCompact: (v: number) => string;
+  let formatPercent: (v: number) => string;
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    // Amounts are hidden by default; reveal them for the formatting assertions.
+    useUiStore().hideAmounts = false;
+    ({ formatINR, formatChange, formatCompact, formatPercent } = useCurrencyFormat());
+  });
 
   describe("formatCompact", () => {
     it("uses Cr at and above the 1 crore threshold", () => {
@@ -50,6 +62,18 @@ describe("useCurrencyFormat", () => {
     it("handles zero and negative percentages", () => {
       expect(formatPercent(0)).toContain("0.00");
       expect(formatPercent(-5)).toContain("-5.00");
+    });
+  });
+
+  describe("privacy masking", () => {
+    it("masks every amount formatter when hideAmounts is on", () => {
+      useUiStore().hideAmounts = true;
+      const f = useCurrencyFormat();
+      expect(f.formatINR(1234)).not.toContain("1,234");
+      expect(f.formatINRDecimal(1234)).not.toContain("1,234");
+      expect(f.formatCompact(1e7)).not.toContain("Cr");
+      expect(f.formatChange(500)).not.toContain("500");
+      expect(f.formatPercent(12.34)).not.toContain("12.34");
     });
   });
 });

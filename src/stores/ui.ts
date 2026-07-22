@@ -21,11 +21,18 @@ export const useUiStore = defineStore("ui", {
     state: () => ({
         sidebarCollapsed: false,
         theme: "system" as Theme,
+        // Privacy: hide all monetary amounts by default every session.
+        // Intentionally NOT persisted — resets to hidden on each app open/unlock.
+        hideAmounts: true,
     }),
 
     actions: {
         toggleSidebar() {
             this.sidebarCollapsed = !this.sidebarCollapsed;
+        },
+
+        toggleHideAmounts() {
+            this.hideAmounts = !this.hideAmounts;
         },
 
         async initTheme() {

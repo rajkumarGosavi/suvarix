@@ -154,7 +154,15 @@ watch(route, () => { drawerOpen.value = false; });
         <header class="mobile-topbar">
             <Button icon="pi pi-bars" text size="small" @click="drawerOpen = true" aria-label="Open menu" />
             <Logo :show-wordmark="true" :size="24" />
-            <Button icon="pi pi-lock" text size="small" @click="lock" aria-label="Lock app" class="ml-auto" />
+            <Button
+                :icon="ui.hideAmounts ? 'pi pi-eye-slash' : 'pi pi-eye'"
+                text
+                size="small"
+                @click="ui.toggleHideAmounts()"
+                :aria-label="ui.hideAmounts ? 'Show amounts' : 'Hide amounts'"
+                class="ml-auto"
+            />
+            <Button icon="pi pi-lock" text size="small" @click="lock" aria-label="Lock app" />
         </header>
 
         <!-- Drawer backdrop (mobile only) -->
@@ -217,6 +225,17 @@ watch(route, () => { drawerOpen.value = false; });
         </nav>
 
         <div class="main-content-wrap">
+            <!-- Desktop persistent header: privacy toggle visible on every page -->
+            <header class="desktop-topbar">
+                <Button
+                    :icon="ui.hideAmounts ? 'pi pi-eye-slash' : 'pi pi-eye'"
+                    :label="ui.hideAmounts ? 'Show Amounts' : 'Hide Amounts'"
+                    text
+                    size="small"
+                    @click="ui.toggleHideAmounts()"
+                    :aria-label="ui.hideAmounts ? 'Show amounts' : 'Hide amounts'"
+                />
+            </header>
             <div v-if="syncBlocked && !syncBannerDismissed" class="sync-block-banner">
                 <i class="pi pi-exclamation-triangle" />
                 <span>A newer app version wrote your synced data — update {{ APP_NAME }} to resume auto-sync. Your local data isn't affected.</span>
@@ -362,6 +381,17 @@ watch(route, () => { drawerOpen.value = false; });
     overflow: hidden;
 }
 
+.desktop-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.4rem 1rem;
+    flex-shrink: 0;
+    background: var(--p-content-background);
+    border-bottom: 1px solid var(--p-content-border-color);
+}
+
 .main-content {
     flex: 1;
     overflow-y: auto;
@@ -405,6 +435,10 @@ watch(route, () => { drawerOpen.value = false; });
 @media (max-width: 639px) {
     .app-shell {
         flex-direction: column;
+    }
+
+    .desktop-topbar {
+        display: none;
     }
 
     .mobile-topbar {
