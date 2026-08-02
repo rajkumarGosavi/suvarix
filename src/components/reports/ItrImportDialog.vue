@@ -5,6 +5,8 @@ import {
     buildItrDebugReport,
     ItrPasswordRequired,
     parseItrPdf,
+    type FieldConfidence,
+    type InvariantIssue,
     type ItrParseResult,
     type ParsedItr,
 } from "@/utils/itrParser";
@@ -24,7 +26,8 @@ const passwordAttempts = ref(0);
 const parsing = ref(false);
 const parseError = ref("");
 const rawLines = ref<string[]>([]);
-const missing = ref<Set<string>>(new Set());
+const confidence = ref<Record<string, FieldConfidence>>({});
+const issues = ref<InvariantIssue[]>([]);
 const showRaw = ref(false);
 const overwriteAsked = ref(false);
 /** Path of the parse-debug log written after the last parse (empty if unwritten). */
@@ -94,6 +97,43 @@ function fieldsOf(group: string) {
     return AMOUNT_FIELDS.filter((f) => f.group === group);
 }
 
+/**
+ * Badge shown next to a field. `parsed` gets none — a plain read from the PDF is
+ * the unremarkable case, and a tag on every row would drown the ones that matter.
+ */
+const CONFIDENCE_TAG: Partial<
+    Record<FieldConfidence, { value: string; severity: string; title: string }>
+> = {
+    missing: {
+        value: "not found",
+        severity: "warn",
+        title: "No row in the PDF matched this field.",
+    },
+    derived: {
+        value: "derived",
+        severity: "info",
+        title: "Not found in the PDF — computed from the surrounding Part B figures.",
+    },
+    confirmed: {
+        value: "checked",
+        severity: "success",
+        title: "Read from the PDF and consistent with the Part B arithmetic.",
+    },
+    conflict: {
+        value: "check this",
+        severity: "danger",
+        title: "This figure breaks the Part B arithmetic — verify it against your return.",
+    },
+};
+
+function tagOf(key: string) {
+    return CONFIDENCE_TAG[confidence.value[key] ?? "parsed"];
+}
+
+const missingCount = computed(
+    () => Object.values(confidence.value).filter((c) => c === "missing").length,
+);
+
 const REGIME_OPTIONS = [
     { label: "Old regime", value: "old" },
     { label: "New regime", value: "new" },
@@ -121,7 +161,8 @@ function reset() {
     passwordAttempts.value = 0;
     parseError.value = "";
     rawLines.value = [];
-    missing.value = new Set();
+    confidence.value = {};
+    issues.value = [];
     showRaw.value = false;
     overwriteAsked.value = false;
     debugLogPath.value = "";
@@ -195,11 +236,8 @@ async function runParse() {
         }
         needsPassword.value = false;
         rawLines.value = result.rawLines;
-        missing.value = new Set(
-            Object.entries(result.confidence)
-                .filter(([, c]) => c === "missing")
-                .map(([k]) => k),
-        );
+        confidence.value = result.confidence;
+        issues.value = result.issues;
         applyParsed(result.data, result.formType, result.assessmentYear);
         stage.value = "review";
     } catch (e: any) {
@@ -220,7 +258,8 @@ async function runParse() {
 
 function startManual() {
     form.value = blankReturn();
-    missing.value = new Set();
+    confidence.value = {};
+    issues.value = [];
     rawLines.value = [];
     stage.value = "review";
 }
@@ -298,8 +337,21 @@ function close() {
         <!-- Stage 2: review / edit -->
         <div v-else class="review">
             <Message v-if="parseError" severity="warn" :closable="false">{{ parseError }}</Message>
-            <Message v-if="missing.size" severity="info" :closable="false">
-                {{ missing.size }} field(s) could not be found in the PDF — they are marked below.
+            <Message v-if="issues.length" severity="error" :closable="false">
+                <p class="msg-lead">
+                    These figures do not add up. At least one was read from the wrong row —
+                    check them against your return before saving.
+                </p>
+                <ul class="issues">
+                    <li v-for="(iss, i) in issues" :key="i">
+                        {{ iss.equation }} — expected
+                        <strong>{{ iss.expected.toLocaleString("en-IN") }}</strong>, read
+                        <strong>{{ iss.actual.toLocaleString("en-IN") }}</strong>
+                    </li>
+                </ul>
+            </Message>
+            <Message v-if="missingCount" severity="info" :closable="false">
+                {{ missingCount }} field(s) could not be found in the PDF — they are marked below.
                 Fill them in from your return before saving.
             </Message>
 
@@ -345,7 +397,12 @@ function close() {
                     <div v-for="f in fieldsOf(group)" :key="String(f.key)" class="field">
                         <label :for="String(f.key)">
                             {{ f.label }}
-                            <Tag v-if="missing.has(String(f.key))" severity="warn" value="not found" />
+                            <Tag
+                                v-if="tagOf(String(f.key))"
+                                :severity="tagOf(String(f.key))!.severity"
+                                :value="tagOf(String(f.key))!.value"
+                                :title="tagOf(String(f.key))!.title"
+                            />
                         </label>
                         <InputNumber
                             :input-id="String(f.key)"
@@ -445,6 +502,14 @@ function close() {
 }
 .err {
     color: var(--p-red-400);
+}
+.msg-lead {
+    margin: 0 0 0.35rem;
+}
+.issues {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.8rem;
 }
 .raw-lines {
     max-height: 14rem;

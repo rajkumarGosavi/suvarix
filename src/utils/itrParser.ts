@@ -37,11 +37,35 @@ export interface ParsedItr {
     taxPayable?: number;
 }
 
-export type FieldConfidence = "parsed" | "missing";
+/**
+ * How much a field is trusted, weakest first:
+ *
+ * - `missing`   — no row matched, and no equation could recover it
+ * - `parsed`    — a row matched, but no equation covers the field
+ * - `derived`   — not in the text; computed as the sole unknown of an equation
+ * - `confirmed` — parsed *and* an equation it appears in balances exactly
+ * - `conflict`  — an equation it appears in does not balance, or the value is
+ *                 negative (every Part B money field is a non-negative integer)
+ */
+export type FieldConfidence = "missing" | "parsed" | "derived" | "confirmed" | "conflict";
+
+const CONFIDENCE_RANK: Record<FieldConfidence, number> = {
+    missing: 0, parsed: 1, derived: 2, confirmed: 3, conflict: 4,
+};
+
+/** A Part B equation that did not balance, with the terms that fed it. */
+export interface InvariantIssue {
+    equation: string;
+    expected: number;
+    actual: number;
+    fields: string[];
+}
 
 export interface ItrParseResult {
     data: ParsedItr;
     confidence: Record<string, FieldConfidence>;
+    /** Equations that failed — every field they touch is marked `conflict`. */
+    issues: InvariantIssue[];
     /** First 300 flattened lines, shown in the review dialog for debugging. */
     rawLines: string[];
     /** Every flattened line, kept for the debug report (not shown in the UI). */
@@ -63,12 +87,71 @@ export class ItrPasswordRequired extends Error {
 // ─── helpers ─────────────────────────────────────────────────
 
 const AMOUNT = String.raw`\(?-?[\d,]+(?:\.\d{1,2})?\)?`;
+/** A whole token that is nothing but a number — "68,791" yes, "3b" and "15cc" no. */
+const WHOLE_AMOUNT = new RegExp(`^${AMOUNT}$`);
+/** `… <item code> <amount>` at the end of a row: "… 15b 9,26,670", "… av 0". */
+const ROW_TAIL = new RegExp(String.raw`(?:^|\s)(?:\d{1,2}[a-z]{0,4}|[a-z]{1,4})\s+(${AMOUNT})\s*$`, "i");
+/**
+ * A section heading: the leading enumerator repeats as the final token, with no
+ * money column between them — "3 Capital Gains 3", "15 Taxes Paid 15". The repeat
+ * is what separates these from a real row like "2 Surcharge 0".
+ */
+const HEADING_ROW = /^(\S+)\s+.*\s(\S+)$/;
 
 function parseAmount(raw: string): number | undefined {
     const negative = raw.trim().startsWith("(");
     const n = parseFloat(raw.replace(/[(),]/g, ""));
     if (!Number.isFinite(n)) return undefined;
     return negative ? -n : n;
+}
+
+/**
+ * The money column of a Part B row, or `undefined` when the row carries none.
+ *
+ * Real acknowledgements print `<enumerator> <label> (<cross-ref>) <item code> <amount>`,
+ * so most numbers on a line are structure. Worse, heading rows ("b Long-term 3b")
+ * end in an item code that looks like money if you simply take the last number —
+ * which is how long-term capital gains used to parse as `3`.
+ */
+function rowAmount(line: string): number | undefined {
+    const heading = line.match(HEADING_ROW);
+    if (heading && heading[1] === heading[2]) return undefined;
+
+    const tail = line.match(ROW_TAIL);
+    if (tail) return parseAmount(tail[1]);
+
+    // Layouts that print no item-code column still end in the amount itself.
+    const last = line.trim().split(/\s+/).pop() ?? "";
+    return WHOLE_AMOUNT.test(last) ? parseAmount(last) : undefined;
+}
+
+/** Enumerators and an amount, with no label text — "iii biii 68,791", "b 0". */
+const BARE_CONTINUATION = new RegExp(String.raw`^(?:[0-9a-z]{1,5}\s+){0,3}${AMOUNT}\s*$`, "i");
+
+/**
+ * Rejoins rows the PDF wrapped. A long label pushes its item code and amount onto
+ * the following line, leaving "Total Long term (bi + bii) (enter nil if loss)" with
+ * no figure and "iii biii 68,791" with no label.
+ *
+ * Only a line with no label text at all is treated as a continuation, so a genuine
+ * next row ("i Short term chargeable @20% … ai 0") is never swallowed.
+ */
+export function joinWrappedRows(lines: string[]): string[] {
+    const out: string[] = [];
+    for (const line of lines) {
+        const prev = out[out.length - 1];
+        if (
+            prev !== undefined &&
+            BARE_CONTINUATION.test(line) &&
+            rowAmount(prev) === undefined &&
+            rowAmount(line) !== undefined
+        ) {
+            out[out.length - 1] = `${prev} ${line}`;
+            continue;
+        }
+        out.push(line);
+    }
+    return out;
 }
 
 /** "XXXXX1234F" — only the last five PAN characters are ever stored. */
@@ -98,75 +181,207 @@ function parseDate(raw: string): string | undefined {
 }
 
 /**
- * Label-anchored amount rules. The first pattern that matches any line wins, so
- * order patterns most-specific first. Capture group 1 must always be the amount.
+ * Label rules. Patterns match the row's *label* only — the amount always comes
+ * from `lastAmount`, never from a capture group, because the number sitting next
+ * to a label is usually a cross-reference.
+ *
+ * The first pattern that matches a line carrying an amount wins, so order the
+ * roll-up row ("Total short term") ahead of the per-rate rows it sums.
  */
 const AMOUNT_RULES: Array<{ field: keyof ParsedItr; patterns: RegExp[] }> = [
     { field: "salaryIncome", patterns: [
-        new RegExp(String.raw`Salaries?\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
-        new RegExp(String.raw`Income\s+from\s+Salary\s*\/?\s*Pension\s+(${AMOUNT})`, "i"),
+        /Income\s+from\s+Salary\s*\/?\s*Pension/i,
+        /Salaries?\b/i,
     ]},
     { field: "housePropertyIncome", patterns: [
-        new RegExp(String.raw`Income\s+from\s+house\s+property\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Income\s+from\s+house\s+property/i,
     ]},
     { field: "capitalGainsStcg", patterns: [
-        new RegExp(String.raw`Short[-\s]?term\s*(?:capital\s+gains?)?\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Total\s+short[-\s]?term/i,
+        /Short[-\s]?term\s*(?:capital\s+gains?)?/i,
     ]},
     { field: "capitalGainsLtcg", patterns: [
-        new RegExp(String.raw`Long[-\s]?term\s*(?:capital\s+gains?)?\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Total\s+long[-\s]?term/i,
+        /Long[-\s]?term\s*(?:capital\s+gains?)?/i,
     ]},
+    // The 4d roll-up carries no head name, only "Total (4a + 4b + 4c)", so it has to
+    // be matched by its cross-reference or the 4a sub-row wins.
     { field: "otherSourcesIncome", patterns: [
-        new RegExp(String.raw`Income\s+from\s+other\s+sources\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Total\s*\(\s*4a\s*\+/i,
+        /Income\s+from\s+other\s+sources/i,
     ]},
     { field: "businessIncome", patterns: [
-        new RegExp(String.raw`Profits?\s+and\s+gains?\s+from\s+business\s+or\s+profession\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Profits?\s+and\s+gains?\s+from\s+business\s+or\s+profession/i,
     ]},
     { field: "grossTotalIncome", patterns: [
-        new RegExp(String.raw`Gross\s+Total\s+Income\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Gross\s+Total\s+Income/i,
     ]},
     { field: "chapterViaDeductions", patterns: [
-        new RegExp(String.raw`Deductions?\s+under\s+Chapter\s+VI[-\s]?A\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
-        new RegExp(String.raw`Total\s+Deductions?\s+under\s+Chapter\s+VI[-\s]?A\s+(${AMOUNT})`, "i"),
+        /Deductions?\s+under\s+Chapter\s+VI[-\s]?A/i,
     ]},
-    // Lookbehind keeps this off the "Gross Total Income" line, which appears first.
+    // "Total Income" must start the label: the lookbehind rejects both
+    // "Gross Total Income" and "Tax payable on total income".
     { field: "totalIncome", patterns: [
-        new RegExp(String.raw`(?<!Gross\s)Total\s+Income\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /(?<![A-Za-z]\s)Total\s+Income/i,
     ]},
     { field: "taxOnTotalIncome", patterns: [
-        new RegExp(String.raw`Tax\s+payable\s+on\s+total\s+income\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Tax\s+payable\s+on\s+total\s+income/i,
     ]},
     { field: "surcharge", patterns: [
-        new RegExp(String.raw`Surcharge\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Total\s+Surcharge/i,
+        /Surcharge/i,
     ]},
+    // Part B-TTI prints cess twice: once on the deemed income under 115JC ("on
+    // (1a+1b)") and once on the real liability ("on (4 + 5iv)"). The 115JC row comes
+    // first and is almost always zero, so the cess on tax has to be preferred.
     { field: "cess", patterns: [
-        new RegExp(String.raw`(?:Health\s+and\s+Education\s+)?Cess\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Cess\s*@?\s*\d*\s*%?\s*on\s*\(\s*4\b/i,
+        /(?:Health\s+and\s+Education\s+)?Cess/i,
     ]},
     { field: "totalTaxLiability", patterns: [
-        new RegExp(String.raw`Gross\s+tax\s+liability\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
-        new RegExp(String.raw`Total\s+Tax\s+(?:and\s+Interest\s+)?Liability\s+(${AMOUNT})`, "i"),
+        /Gross\s+tax\s+liability/i,
+        /Total\s+Tax\s+(?:and\s+Interest\s+)?Liability/i,
     ]},
     { field: "tdsPaid", patterns: [
-        new RegExp(String.raw`\bTDS\b\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /\bTDS\b/i,
     ]},
+    // "…default in payment of advance tax (section 234B)" is an interest row, not a
+    // payment; the lookbehind keeps the 234B/234C rows out.
     { field: "advanceTaxPaid", patterns: [
-        new RegExp(String.raw`Advance\s+Tax\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /(?<!of\s)Advance\s+Tax/i,
     ]},
     { field: "selfAssessmentTaxPaid", patterns: [
-        new RegExp(String.raw`Self[-\s]?Assessment\s+Tax\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Self[-\s]?Assessment\s+Tax/i,
     ]},
     { field: "tcsPaid", patterns: [
-        new RegExp(String.raw`\bTCS\b\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /\bTCS\b/i,
     ]},
     { field: "totalTaxPaid", patterns: [
-        new RegExp(String.raw`Total\s+Taxes?\s+Paid\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Total\s+Taxes?\s+Paid/i,
     ]},
     { field: "refundDue", patterns: [
-        new RegExp(String.raw`Refund\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /\bRefund\b/i,
     ]},
+    // "on total income" belongs to taxOnTotalIncome, not to the balance payable.
     { field: "taxPayable", patterns: [
-        new RegExp(String.raw`(?:Amount\s+payable|Tax\s+Payable)\s*(?:\(.*?\))?\s+(${AMOUNT})`, "i"),
+        /Amount\s+payable/i,
+        /Balance\s+Tax\s+Payable/i,
+        /Tax\s+Payable(?!\s+on)/i,
     ]},
 ];
+
+// ─── Part B invariants ───────────────────────────────────────
+
+type NumericField = {
+    [K in keyof ParsedItr]-?: ParsedItr[K] extends number | undefined ? K : never;
+}[keyof ParsedItr];
+
+/**
+ * Part B arithmetic, as `total = Σ (sign × term)`.
+ *
+ * Only equations that hold unconditionally for ITR-2 are listed. The income-head
+ * sum and the tax-liability build-up are deliberately absent: they need the
+ * loss set-off, rebate and interest rows, which `ParsedItr` does not carry, so
+ * encoding them would raise conflicts on perfectly good returns.
+ */
+interface Invariant {
+    equation: string;
+    total: NumericField;
+    terms: Array<{ field: NumericField; sign: 1 | -1 }>;
+}
+
+const INVARIANTS: Invariant[] = [
+    {
+        equation: "Total Income = Gross Total Income − Chapter VI-A deductions",
+        total: "totalIncome",
+        terms: [
+            { field: "grossTotalIncome", sign: 1 },
+            { field: "chapterViaDeductions", sign: -1 },
+        ],
+    },
+    {
+        equation: "Total Taxes Paid = Advance Tax + TDS + TCS + Self-Assessment Tax",
+        total: "totalTaxPaid",
+        terms: [
+            { field: "advanceTaxPaid", sign: 1 },
+            { field: "tdsPaid", sign: 1 },
+            { field: "tcsPaid", sign: 1 },
+            { field: "selfAssessmentTaxPaid", sign: 1 },
+        ],
+    },
+];
+
+/**
+ * Section 288A rounds total income to the nearest ten rupees, so an equation can
+ * legitimately miss by up to 9. Anything beyond that is a misread row.
+ */
+const BALANCE_TOLERANCE = 10;
+
+/**
+ * Cross-checks the parsed figures against the form's own arithmetic.
+ *
+ * Each equation is solved as a linear constraint: fully known and balancing
+ * confirms every term, fully known and off flags every term, and exactly one
+ * unknown is filled in. Returns fresh objects; the inputs are not mutated.
+ */
+export function applyInvariants(
+    data: ParsedItr,
+    confidence: Record<string, FieldConfidence>,
+): { data: ParsedItr; confidence: Record<string, FieldConfidence>; issues: InvariantIssue[] } {
+    const out: ParsedItr = { ...data };
+    const conf = { ...confidence };
+    const issues: InvariantIssue[] = [];
+
+    const num = (f: NumericField) => out[f] as number | undefined;
+    // Confidence only ever moves up the rank, so two equations touching the same
+    // field cannot undo each other — and a conflict always outranks a confirm.
+    const raise = (f: string, level: FieldConfidence) => {
+        const cur = conf[f] ?? "missing";
+        if (CONFIDENCE_RANK[level] > CONFIDENCE_RANK[cur]) conf[f] = level;
+    };
+
+    // A negative or fractional figure is impossible in Part B regardless of any equation.
+    for (const [field, value] of Object.entries(out)) {
+        if (typeof value === "number" && (value < 0 || !Number.isFinite(value))) {
+            raise(field, "conflict");
+        }
+    }
+
+    for (const inv of INVARIANTS) {
+        // Written as total − Σ(sign × term) = 0 so every variable has a coefficient.
+        const parts: Array<{ field: NumericField; coeff: number }> = [
+            { field: inv.total, coeff: 1 },
+            ...inv.terms.map((t) => ({ field: t.field, coeff: -t.sign })),
+        ];
+        const fields = parts.map((p) => p.field);
+        const unknown = parts.filter((p) => num(p.field) === undefined);
+
+        if (unknown.length > 1) continue;
+
+        if (unknown.length === 1) {
+            const target = unknown[0];
+            const known = parts
+                .filter((p) => p !== target)
+                .reduce((sum, p) => sum + p.coeff * num(p.field)!, 0);
+            const value = -known / target.coeff;
+            if (value < 0 || !Number.isInteger(value)) continue;
+            (out as Record<string, unknown>)[target.field] = value;
+            raise(target.field, "derived");
+            continue;
+        }
+
+        const residual = parts.reduce((sum, p) => sum + p.coeff * num(p.field)!, 0);
+        if (Math.abs(residual) <= BALANCE_TOLERANCE) {
+            for (const f of fields) raise(f, "confirmed");
+        } else {
+            const expected = num(inv.total)! - residual;
+            issues.push({ equation: inv.equation, expected, actual: num(inv.total)!, fields });
+            for (const f of fields) raise(f, "conflict");
+        }
+    }
+
+    return { data: out, confidence: conf, issues };
+}
 
 // ─── pure parsing ────────────────────────────────────────────
 
@@ -175,18 +390,23 @@ export function parseItrLines(lines: string[]): ItrParseResult {
     const confidence: Record<string, FieldConfidence> = {};
     const matchedLines: Record<string, string> = {};
 
+    // Schedules print before Part B and repeat the same labels ("Short-term capital
+    // gain", "TDS", "Surcharge"), so first-match-wins over the whole document binds
+    // to a schedule row. Amounts only ever come from the Part B computation block.
+    const amountLines = joinWrappedRows(partBLines(lines));
+
     for (const { field, patterns } of AMOUNT_RULES) {
         let value: number | undefined;
         let matched: string | undefined;
         outer: for (const pattern of patterns) {
-            for (const line of lines) {
-                const m = line.match(pattern);
-                if (m) {
-                    value = parseAmount(m[1]);
-                    if (value !== undefined) {
-                        matched = line;
-                        break outer;
-                    }
+            for (const line of amountLines) {
+                if (!pattern.test(line)) continue;
+                // A heading row ("b Long-term 3b") carries no amount — keep looking.
+                const v = rowAmount(line);
+                if (v !== undefined) {
+                    value = v;
+                    matched = line;
+                    break outer;
                 }
             }
         }
@@ -236,9 +456,12 @@ export function parseItrLines(lines: string[]): ItrParseResult {
         confidence[key] = data[key] === undefined ? "missing" : "parsed";
     }
 
+    const checked = applyInvariants(data, confidence);
+
     return {
-        data,
-        confidence,
+        data: checked.data,
+        confidence: checked.confidence,
+        issues: checked.issues,
         rawLines: lines.slice(0, 300),
         allLines: lines,
         matchedLines,
@@ -289,12 +512,22 @@ export function buildItrDebugReport(result: ItrParseResult, fileName: string): s
     const keys = Object.keys(result.confidence).sort();
     for (const key of keys) {
         const value = (result.data as Record<string, unknown>)[key];
-        if (result.confidence[key] === "missing") {
+        const level = result.confidence[key];
+        if (level === "missing") {
             out.push(`${key.padEnd(24)} = MISSING`);
         } else {
-            out.push(`${key.padEnd(24)} = ${String(value)}`);
+            out.push(`${key.padEnd(24)} = ${String(value)} [${level}]`);
             const src = result.matchedLines[key];
             if (src) out.push(`${" ".repeat(24)}   ← "${src}"`);
+        }
+    }
+
+    if (result.issues.length) {
+        out.push("");
+        out.push("--- FAILED INVARIANTS ---");
+        for (const iss of result.issues) {
+            out.push(`${iss.equation}: expected ${iss.expected}, read ${iss.actual}`);
+            out.push(`${" ".repeat(4)}fields: ${iss.fields.join(", ")}`);
         }
     }
 
