@@ -6,6 +6,7 @@ import { useReportsStore } from "@/stores/reports";
 import { useCurrencyFormat } from "@/composables/useCurrencyFormat";
 import { useChartColors } from "@/composables/useChartColors";
 import { Line } from "vue-chartjs";
+import ItrTaxPanel from "@/components/reports/ItrTaxPanel.vue";
 import {
     Chart as ChartJS,
     CategoryScale,
@@ -190,6 +191,7 @@ onMounted(() => {
             <TabList>
                 <Tab :value="0">Net Worth History</Tab>
                 <Tab :value="1">Capital Gains</Tab>
+                <Tab :value="2">Income Tax</Tab>
             </TabList>
 
             <TabPanels>
@@ -365,6 +367,11 @@ onMounted(() => {
                             </Column>
                         </DataTable>
                     </template>
+                </TabPanel>
+
+                <!-- ── Income Tax (filed ITR returns) ── -->
+                <TabPanel :value="2">
+                    <ItrTaxPanel />
                 </TabPanel>
             </TabPanels>
         </Tabs>

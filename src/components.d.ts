@@ -37,6 +37,8 @@ declare module 'vue' {
     InputText: typeof import('primevue/inputtext')['default']
     InsightsFeed: typeof import('./components/InsightsFeed.vue')['default']
     InsurancePanel: typeof import('./components/portfolio/InsurancePanel.vue')['default']
+    ItrImportDialog: typeof import('./components/reports/ItrImportDialog.vue')['default']
+    ItrTaxPanel: typeof import('./components/reports/ItrTaxPanel.vue')['default']
     Logo: typeof import('./components/Logo.vue')['default']
     Menu: typeof import('primevue/menu')['default']
     Message: typeof import('primevue/message')['default']

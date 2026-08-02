@@ -65,6 +65,8 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // MIGRATION_025: opt-in savings challenges — gamification-only, CREATE ... IF NOT EXISTS, idempotent.
     #[cfg(feature = "gamification")]
     conn.execute_batch(MIGRATION_025).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_026: filed ITR returns — CREATE TABLE IF NOT EXISTS, idempotent.
+    conn.execute_batch(MIGRATION_026).map_err(|e| AppError::Database(e.to_string()))?;
     tracing::debug!("migrations complete");
     Ok(())
 }
@@ -119,6 +121,50 @@ CREATE TABLE IF NOT EXISTS user_challenges (
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_user_challenges_status ON user_challenges(status);
+";
+
+// Filed income-tax returns (ITR-2), one row per assessment year, imported from the
+// user's own ITR PDF or entered by hand. Read-only reporting data — deliberately
+// outside SYNC_TABLES (not part of the .svbak merge set) for now.
+const MIGRATION_026: &str = "
+CREATE TABLE IF NOT EXISTS itr_returns (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_year          TEXT NOT NULL UNIQUE,
+    form_type                TEXT NOT NULL,
+    regime                   TEXT,
+    pan_masked               TEXT,
+    filing_date              TEXT,
+    ack_number               TEXT,
+
+    salary_income            REAL NOT NULL DEFAULT 0,
+    house_property_income    REAL NOT NULL DEFAULT 0,
+    capital_gains_stcg       REAL NOT NULL DEFAULT 0,
+    capital_gains_ltcg       REAL NOT NULL DEFAULT 0,
+    other_sources_income     REAL NOT NULL DEFAULT 0,
+    business_income          REAL NOT NULL DEFAULT 0,
+    gross_total_income       REAL NOT NULL DEFAULT 0,
+
+    chapter_via_deductions   REAL NOT NULL DEFAULT 0,
+    total_income             REAL NOT NULL DEFAULT 0,
+
+    tax_on_total_income      REAL NOT NULL DEFAULT 0,
+    surcharge                REAL NOT NULL DEFAULT 0,
+    cess                     REAL NOT NULL DEFAULT 0,
+    total_tax_liability      REAL NOT NULL DEFAULT 0,
+
+    tds_paid                 REAL NOT NULL DEFAULT 0,
+    advance_tax_paid         REAL NOT NULL DEFAULT 0,
+    self_assessment_tax_paid REAL NOT NULL DEFAULT 0,
+    tcs_paid                 REAL NOT NULL DEFAULT 0,
+    total_tax_paid           REAL NOT NULL DEFAULT 0,
+
+    refund_due               REAL NOT NULL DEFAULT 0,
+    tax_payable              REAL NOT NULL DEFAULT 0,
+
+    source                   TEXT NOT NULL DEFAULT 'pdf',
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL
+);
 ";
 
 /// Tables that participate in cross-device sync (see `backup::commands`). Single
@@ -860,6 +906,32 @@ CREATE INDEX IF NOT EXISTS idx_sip_active
 mod tests {
     use super::*;
     use crate::test_utils::test_db_pool;
+
+    #[test]
+    fn migration_026_creates_itr_returns_with_unique_assessment_year() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        conn.execute(
+            "INSERT INTO itr_returns (assessment_year, form_type, created_at, updated_at)
+             VALUES ('2024-25', 'ITR-2', datetime('now'), datetime('now'))",
+            [],
+        ).expect("first insert should succeed");
+
+        let dup = conn.execute(
+            "INSERT INTO itr_returns (assessment_year, form_type, created_at, updated_at)
+             VALUES ('2024-25', 'ITR-2', datetime('now'), datetime('now'))",
+            [],
+        );
+        assert!(dup.is_err(), "assessment_year must be UNIQUE");
+
+        // Defaults must make every numeric column non-null after a minimal insert.
+        let gross: f64 = conn.query_row(
+            "SELECT gross_total_income FROM itr_returns WHERE assessment_year = '2024-25'",
+            [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(gross, 0.0);
+    }
 
     #[test]
     fn run_migrations_is_idempotent_when_rerun_on_same_connection() {

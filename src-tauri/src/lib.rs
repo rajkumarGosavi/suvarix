@@ -13,6 +13,7 @@ pub mod error;
 pub mod financial_health;
 pub mod income_expenses;
 pub mod insights;
+pub mod itr;
 pub mod liabilities;
 pub mod logging;
 pub mod models;
@@ -245,6 +246,12 @@ pub fn run() {
             reports::commands::get_capital_gains,
             reports::commands::get_net_worth_history,
             reports::commands::take_net_worth_snapshot,
+            // itr (filed income-tax returns)
+            itr::commands::save_itr_return,
+            itr::commands::list_itr_returns,
+            itr::commands::delete_itr_return,
+            itr::commands::get_itr_summary,
+            itr::commands::write_itr_debug_log,
             // settings
             settings::commands::get_setting,
             settings::commands::set_setting,
