@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskPan, parseItrLines } from "@/utils/itrParser";
+import { buildItrDebugReport, maskPan, parseItrLines, partBLines } from "@/utils/itrParser";
 
 // Representative flattened text lines from an ITR-2 PDF (label, then value).
 const ITR2_LINES = [
@@ -92,6 +92,49 @@ describe("parseItrLines", () => {
         const r = parseItrLines(["Some bank statement", "Closing balance 1,000.00"]);
         expect(r.formType).toBeNull();
         expect(r.assessmentYear).toBeNull();
+    });
+});
+
+describe("partBLines", () => {
+    it("slices from the Part B-TI header to the TAX PAYMENTS section", () => {
+        const lines = [
+            "Header noise",
+            "PART B – TI COMPUTATION OF TOTAL INCOME",
+            "1 Salaries (6 of Schedule S) 1 12,50,000",
+            "PARTB-TTI - COMPUTATION OF TAX LIABILITY ON TOTAL INCOME",
+            "17 Refund (If 15e is greater than 14) 17 13,120",
+            "TAX PAYMENTS",
+            "20A Advance tax table",
+        ];
+        const slice = partBLines(lines);
+        expect(slice[0]).toContain("PART B – TI");
+        expect(slice).toHaveLength(4);
+        expect(slice.some((l) => /TAX PAYMENTS/.test(l))).toBe(false);
+    });
+
+    it("falls back to every line when the section header is absent", () => {
+        expect(partBLines(["a", "b"])).toEqual(["a", "b"]);
+    });
+});
+
+describe("buildItrDebugReport", () => {
+    it("lists Part B raw lines and every field with its source line", () => {
+        const result = parseItrLines(ITR2_LINES);
+        const report = buildItrDebugReport(result, "itr2.pdf");
+
+        expect(report).toContain("file: itr2.pdf");
+        expect(report).toContain("formType: ITR-2");
+        expect(report).toContain("assessmentYear: 2024-25");
+        expect(report).toContain("--- RAW LINES: PART B-TI + PART B-TTI ---");
+        expect(report).toContain("1 Salaries (6 of Schedule S) 12,50,000");
+        expect(report).toMatch(/salaryIncome\s+= 1250000/);
+        expect(report).toContain('← "1 Salaries (6 of Schedule S) 12,50,000"');
+    });
+
+    it("marks fields the parser could not find", () => {
+        const partial = ITR2_LINES.filter((l) => !/house property/i.test(l));
+        const report = buildItrDebugReport(parseItrLines(partial), "itr2.pdf");
+        expect(report).toMatch(/housePropertyIncome\s+= MISSING/);
     });
 });
 

@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use crate::db::DbState;
 use crate::error::{AppError, Result};
@@ -251,6 +251,24 @@ pub fn delete_itr_return(id: i64, state: State<DbState>) -> Result<()> {
 pub fn get_itr_summary(state: State<DbState>) -> Result<ItrSummary> {
     let conn = state.0.get()?;
     compute_summary(&conn)
+}
+
+/// Dumps the frontend's parse report to `<app data dir>/itr-parse-debug.log`,
+/// overwriting any previous run, and returns the path so the UI can show it.
+///
+/// The report holds real income and tax figures in plain text, outside the
+/// SQLCipher DB — it exists purely to tune the ITR-2 parser rules against a real
+/// return, and is meant to be deleted once the patterns are right.
+#[tauri::command]
+pub fn write_itr_debug_log(content: String, app: AppHandle) -> Result<String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Io(format!("app data dir unavailable: {e}")))?;
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join("itr-parse-debug.log");
+    std::fs::write(&path, content)?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

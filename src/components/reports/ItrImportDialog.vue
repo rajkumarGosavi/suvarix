@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ItrPasswordRequired, parseItrPdf, type ParsedItr } from "@/utils/itrParser";
+import { invoke } from "@tauri-apps/api/core";
+import {
+    buildItrDebugReport,
+    ItrPasswordRequired,
+    parseItrPdf,
+    type ItrParseResult,
+    type ParsedItr,
+} from "@/utils/itrParser";
 import { useItrStore, type ItrReturn } from "@/stores/itr";
 
 const props = defineProps<{ visible: boolean; editing?: ItrReturn | null }>();
@@ -20,6 +27,8 @@ const rawLines = ref<string[]>([]);
 const missing = ref<Set<string>>(new Set());
 const showRaw = ref(false);
 const overwriteAsked = ref(false);
+/** Path of the parse-debug log written after the last parse (empty if unwritten). */
+const debugLogPath = ref("");
 
 function blankReturn(): ItrReturn {
     return {
@@ -115,6 +124,7 @@ function reset() {
     missing.value = new Set();
     showRaw.value = false;
     overwriteAsked.value = false;
+    debugLogPath.value = "";
     form.value = blankReturn();
 }
 
@@ -153,12 +163,25 @@ function applyParsed(data: ParsedItr, formType: string | null, assessmentYear: s
     form.value = next;
 }
 
+// Writes the Part B raw lines + what each rule made of them to a log file, so the
+// parser patterns can be tuned against a real return. Never blocks the import.
+async function writeDebugLog(result: ItrParseResult) {
+    try {
+        debugLogPath.value = await invoke<string>("write_itr_debug_log", {
+            content: buildItrDebugReport(result, file.value?.name ?? "(unknown)"),
+        });
+    } catch {
+        debugLogPath.value = "";
+    }
+}
+
 async function runParse() {
     if (!file.value) return;
     parsing.value = true;
     parseError.value = "";
     try {
         const result = await parseItrPdf(await file.value.arrayBuffer(), password.value.trim());
+        await writeDebugLog(result);
         if (!result.formType && !result.assessmentYear) {
             parseError.value =
                 "This does not look like an ITR PDF — no form type or assessment year found. " +
@@ -336,6 +359,11 @@ function close() {
                     </div>
                 </div>
             </template>
+
+            <Message v-if="debugLogPath" severity="secondary" :closable="false">
+                Parse debug log written to <code>{{ debugLogPath }}</code> — it contains your
+                actual figures in plain text. Delete it once the parser is tuned.
+            </Message>
 
             <div v-if="rawLines.length" class="raw">
                 <Button

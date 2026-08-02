@@ -251,6 +251,7 @@ pub fn run() {
             itr::commands::list_itr_returns,
             itr::commands::delete_itr_return,
             itr::commands::get_itr_summary,
+            itr::commands::write_itr_debug_log,
             // settings
             settings::commands::get_setting,
             settings::commands::set_setting,

@@ -44,6 +44,10 @@ export interface ItrParseResult {
     confidence: Record<string, FieldConfidence>;
     /** First 300 flattened lines, shown in the review dialog for debugging. */
     rawLines: string[];
+    /** Every flattened line, kept for the debug report (not shown in the UI). */
+    allLines: string[];
+    /** For each parsed field, the source line it was read from. */
+    matchedLines: Record<string, string>;
     formType: string | null;
     assessmentYear: string | null;
 }
@@ -169,15 +173,20 @@ const AMOUNT_RULES: Array<{ field: keyof ParsedItr; patterns: RegExp[] }> = [
 export function parseItrLines(lines: string[]): ItrParseResult {
     const data: ParsedItr = {};
     const confidence: Record<string, FieldConfidence> = {};
+    const matchedLines: Record<string, string> = {};
 
     for (const { field, patterns } of AMOUNT_RULES) {
         let value: number | undefined;
+        let matched: string | undefined;
         outer: for (const pattern of patterns) {
             for (const line of lines) {
                 const m = line.match(pattern);
                 if (m) {
                     value = parseAmount(m[1]);
-                    if (value !== undefined) break outer;
+                    if (value !== undefined) {
+                        matched = line;
+                        break outer;
+                    }
                 }
             }
         }
@@ -186,6 +195,7 @@ export function parseItrLines(lines: string[]): ItrParseResult {
         } else {
             (data as Record<string, unknown>)[field] = value;
             confidence[field] = "parsed";
+            matchedLines[field] = matched!;
         }
     }
 
@@ -230,9 +240,65 @@ export function parseItrLines(lines: string[]): ItrParseResult {
         data,
         confidence,
         rawLines: lines.slice(0, 300),
+        allLines: lines,
+        matchedLines,
         formType,
         assessmentYear,
     };
+}
+
+// ─── debug report ────────────────────────────────────────────
+
+const PART_B_START = /PART\s*B\s*[–-]\s*TI\b/i;
+const PART_B_END = /^\s*TAX\s+PAYMENTS\b/i;
+
+/**
+ * The Part B-TI + Part B-TTI slice of the document — every computation row the
+ * parser cares about. Falls back to all lines when the section markers are absent
+ * (a layout we have not seen, which is exactly when the full dump is useful).
+ */
+export function partBLines(lines: string[]): string[] {
+    const start = lines.findIndex((l) => PART_B_START.test(l));
+    if (start === -1) return lines;
+    const rest = lines.slice(start);
+    const end = rest.findIndex((l, i) => i > 0 && PART_B_END.test(l));
+    return end === -1 ? rest : rest.slice(0, end);
+}
+
+/**
+ * Plain-text report pairing every Part B raw line with what the parser made of
+ * it. Written to a log file so parser rules can be tuned against a real return.
+ * Contains real income and tax figures — treat as sensitive.
+ */
+export function buildItrDebugReport(result: ItrParseResult, fileName: string): string {
+    const partB = partBLines(result.allLines);
+    const out: string[] = [];
+
+    out.push(`=== ITR parse debug — ${new Date().toISOString()} ===`);
+    out.push(`file: ${fileName}`);
+    out.push(`formType: ${result.formType ?? "(not found)"}`);
+    out.push(`assessmentYear: ${result.assessmentYear ?? "(not found)"}`);
+    out.push(`total lines: ${result.allLines.length}, Part B lines: ${partB.length}`);
+    out.push("");
+
+    out.push("--- RAW LINES: PART B-TI + PART B-TTI ---");
+    partB.forEach((line, i) => out.push(`[${String(i + 1).padStart(4, "0")}] ${line}`));
+    out.push("");
+
+    out.push("--- PARSED FIELDS ---");
+    const keys = Object.keys(result.confidence).sort();
+    for (const key of keys) {
+        const value = (result.data as Record<string, unknown>)[key];
+        if (result.confidence[key] === "missing") {
+            out.push(`${key.padEnd(24)} = MISSING`);
+        } else {
+            out.push(`${key.padEnd(24)} = ${String(value)}`);
+            const src = result.matchedLines[key];
+            if (src) out.push(`${" ".repeat(24)}   ← "${src}"`);
+        }
+    }
+
+    return out.join("\n");
 }
 
 // ─── PDF text extraction ─────────────────────────────────────
