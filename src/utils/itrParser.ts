@@ -38,6 +38,40 @@ export interface ParsedItr {
 }
 
 /**
+ * Part B rows read purely to cross-check the figures above. They are never saved:
+ * `ItrImportDialog` copies only the fields it lists, so these stay in the parse
+ * result and go no further. Without them most equations have too many unknowns to
+ * solve, which is the only reason they are parsed at all.
+ */
+export interface ItrAuditFields {
+    /** 3c — sum of short- and long-term gains, before the 115BBH bucket. */
+    capitalGainsSum?: number;
+    /** 3d — gains taxed at 30% u/s 115BBH (virtual digital assets). */
+    capitalGains115BBH?: number;
+    /** 3e — total capital gains, as it enters the head-wise total. */
+    capitalGainsTotal?: number;
+    /** 5 — total of head-wise income, before any loss set-off. */
+    totalHeadwiseIncome?: number;
+    /** 6 — current-year losses set off (Schedule CYLA). */
+    currentYearLossSetoff?: number;
+    /** 8 — brought-forward losses set off (Schedule BFLA). */
+    broughtFwdLossSetoff?: number;
+    /** 3 of Part B-TTI — rebate u/s 87A. */
+    rebate87A?: number;
+    /** 4 of Part B-TTI — tax payable after rebate. */
+    taxAfterRebate?: number;
+    /** 12 of Part B-TTI — net tax liability, before interest and fee. */
+    netTaxLiability?: number;
+    /** 13e — total interest u/s 234A/B/C plus fee u/s 234F. */
+    interestAndFee?: number;
+    /** 14 — aggregate liability, which the taxes paid are settled against. */
+    aggregateLiability?: number;
+}
+
+/** Everything a Part B row can populate: the saved payload plus the audit rows. */
+export type ParsedRow = ParsedItr & ItrAuditFields;
+
+/**
  * How much a field is trusted, weakest first:
  *
  * - `missing`   — no row matched, and no equation could recover it
@@ -62,7 +96,7 @@ export interface InvariantIssue {
 }
 
 export interface ItrParseResult {
-    data: ParsedItr;
+    data: ParsedRow;
     confidence: Record<string, FieldConfidence>;
     /** Equations that failed — every field they touch is marked `conflict`. */
     issues: InvariantIssue[];
@@ -188,7 +222,7 @@ function parseDate(raw: string): string | undefined {
  * The first pattern that matches a line carrying an amount wins, so order the
  * roll-up row ("Total short term") ahead of the per-rate rows it sums.
  */
-const AMOUNT_RULES: Array<{ field: keyof ParsedItr; patterns: RegExp[] }> = [
+const AMOUNT_RULES: Array<{ field: keyof ParsedRow; patterns: RegExp[] }> = [
     { field: "salaryIncome", patterns: [
         /Income\s+from\s+Salary\s*\/?\s*Pension/i,
         /Salaries?\b/i,
@@ -227,7 +261,10 @@ const AMOUNT_RULES: Array<{ field: keyof ParsedItr; patterns: RegExp[] }> = [
     { field: "taxOnTotalIncome", patterns: [
         /Tax\s+payable\s+on\s+total\s+income/i,
     ]},
+    // Like 4d, the surcharge roll-up (5iii) is labelled only "Total (ia + iia)", so
+    // without the cross-reference this lands on the 115JC surcharge row (1b) instead.
     { field: "surcharge", patterns: [
+        /Total\s*\(\s*ia\s*\+/i,
         /Total\s+Surcharge/i,
         /Surcharge/i,
     ]},
@@ -266,23 +303,57 @@ const AMOUNT_RULES: Array<{ field: keyof ParsedItr; patterns: RegExp[] }> = [
     { field: "taxPayable", patterns: [
         /Amount\s+payable/i,
         /Balance\s+Tax\s+Payable/i,
-        /Tax\s+Payable(?!\s+on)/i,
+        /Tax\s+Payable(?!\s+on|\s+after)/i,
+    ]},
+
+    // ── audit rows: parsed only to close the equations, never saved ──
+    { field: "capitalGainsSum", patterns: [
+        /Sum\s+of\s+Short[-\s]?term\s*\/\s*Long[-\s]?term/i,
+    ]},
+    { field: "capitalGains115BBH", patterns: [
+        /115BBH/i,
+    ]},
+    { field: "capitalGainsTotal", patterns: [
+        /Total\s+Capital\s+Gains/i,
+    ]},
+    { field: "totalHeadwiseIncome", patterns: [
+        /Total\s+of\s+head\s*wise\s+income/i,
+    ]},
+    { field: "currentYearLossSetoff", patterns: [
+        /Losses\s+of\s+current\s+year\s+set\s+off/i,
+    ]},
+    { field: "broughtFwdLossSetoff", patterns: [
+        /Brought\s+forward\s+losses\s+set\s+off/i,
+    ]},
+    { field: "rebate87A", patterns: [
+        /Rebate\s+under\s+section\s+87A/i,
+    ]},
+    { field: "taxAfterRebate", patterns: [
+        /Tax\s+Payable\s+after\s+rebate/i,
+    ]},
+    { field: "netTaxLiability", patterns: [
+        /Net\s+tax\s+liability/i,
+    ]},
+    { field: "interestAndFee", patterns: [
+        /Total\s+Interest\s+and\s+Fee\s+Payable/i,
+    ]},
+    { field: "aggregateLiability", patterns: [
+        /Aggregate\s+liability/i,
     ]},
 ];
 
 // ─── Part B invariants ───────────────────────────────────────
 
 type NumericField = {
-    [K in keyof ParsedItr]-?: ParsedItr[K] extends number | undefined ? K : never;
-}[keyof ParsedItr];
+    [K in keyof ParsedRow]-?: ParsedRow[K] extends number | undefined ? K : never;
+}[keyof ParsedRow];
 
 /**
  * Part B arithmetic, as `total = Σ (sign × term)`.
  *
- * Only equations that hold unconditionally for ITR-2 are listed. The income-head
- * sum and the tax-liability build-up are deliberately absent: they need the
- * loss set-off, rebate and interest rows, which `ParsedItr` does not carry, so
- * encoding them would raise conflicts on perfectly good returns.
+ * Every equation here holds unconditionally for ITR-2. The ones spanning income
+ * heads or the tax build-up are only solvable because `ItrAuditFields` supplies
+ * the loss set-off, rebate and interest rows that the saved payload omits.
  */
 interface Invariant {
     equation: string;
@@ -291,6 +362,75 @@ interface Invariant {
 }
 
 const INVARIANTS: Invariant[] = [
+    {
+        equation: "Sum of capital gains (3c) = short term + long term",
+        total: "capitalGainsSum",
+        terms: [
+            { field: "capitalGainsStcg", sign: 1 },
+            { field: "capitalGainsLtcg", sign: 1 },
+        ],
+    },
+    {
+        equation: "Total capital gains (3e) = 3c + gains taxed u/s 115BBH",
+        total: "capitalGainsTotal",
+        terms: [
+            { field: "capitalGainsSum", sign: 1 },
+            { field: "capitalGains115BBH", sign: 1 },
+        ],
+    },
+    {
+        equation: "Total head-wise income (5) = salary + house property + 3e + other sources",
+        total: "totalHeadwiseIncome",
+        terms: [
+            { field: "salaryIncome", sign: 1 },
+            { field: "housePropertyIncome", sign: 1 },
+            { field: "capitalGainsTotal", sign: 1 },
+            { field: "otherSourcesIncome", sign: 1 },
+        ],
+    },
+    {
+        equation: "Gross Total Income = head-wise total − current-year losses − brought-forward losses",
+        total: "grossTotalIncome",
+        terms: [
+            { field: "totalHeadwiseIncome", sign: 1 },
+            { field: "currentYearLossSetoff", sign: -1 },
+            { field: "broughtFwdLossSetoff", sign: -1 },
+        ],
+    },
+    {
+        equation: "Tax payable after rebate = tax on total income − rebate u/s 87A",
+        total: "taxAfterRebate",
+        terms: [
+            { field: "taxOnTotalIncome", sign: 1 },
+            { field: "rebate87A", sign: -1 },
+        ],
+    },
+    {
+        equation: "Gross tax liability = tax after rebate + surcharge + cess",
+        total: "totalTaxLiability",
+        terms: [
+            { field: "taxAfterRebate", sign: 1 },
+            { field: "surcharge", sign: 1 },
+            { field: "cess", sign: 1 },
+        ],
+    },
+    {
+        equation: "Aggregate liability = net tax liability + interest and fee",
+        total: "aggregateLiability",
+        terms: [
+            { field: "netTaxLiability", sign: 1 },
+            { field: "interestAndFee", sign: 1 },
+        ],
+    },
+    {
+        equation: "Refund = taxes paid − aggregate liability + amount still payable",
+        total: "refundDue",
+        terms: [
+            { field: "totalTaxPaid", sign: 1 },
+            { field: "aggregateLiability", sign: -1 },
+            { field: "taxPayable", sign: 1 },
+        ],
+    },
     {
         equation: "Total Income = Gross Total Income − Chapter VI-A deductions",
         total: "totalIncome",
@@ -325,10 +465,10 @@ const BALANCE_TOLERANCE = 10;
  * unknown is filled in. Returns fresh objects; the inputs are not mutated.
  */
 export function applyInvariants(
-    data: ParsedItr,
+    data: ParsedRow,
     confidence: Record<string, FieldConfidence>,
-): { data: ParsedItr; confidence: Record<string, FieldConfidence>; issues: InvariantIssue[] } {
-    const out: ParsedItr = { ...data };
+): { data: ParsedRow; confidence: Record<string, FieldConfidence>; issues: InvariantIssue[] } {
+    const out: ParsedRow = { ...data };
     const conf = { ...confidence };
     const issues: InvariantIssue[] = [];
 
@@ -386,7 +526,7 @@ export function applyInvariants(
 // ─── pure parsing ────────────────────────────────────────────
 
 export function parseItrLines(lines: string[]): ItrParseResult {
-    const data: ParsedItr = {};
+    const data: ParsedRow = {};
     const confidence: Record<string, FieldConfidence> = {};
     const matchedLines: Record<string, string> = {};
 

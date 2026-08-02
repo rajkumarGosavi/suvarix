@@ -204,6 +204,12 @@ const ITR2_WRAPPED_LINES = [
     "4 Income from other sources 4",
     "a Net Income from Other sources chargeable to tax at Normal Applicable rates (6 of 4a 90,000",
     "d Total (4a + 4b + 4c)(enter nil if loss) 4d 1,08,227",
+    "c Sum of Short-term / Long-term Capital Gains (3av + 3biii) (enter nil if loss) 3c 68,791",
+    "d Capital gains chargeable @ 30 % u/s 115BBH (C2 of Schedule CG) 3d 0",
+    "e Total Capital Gains (3c+3d) 3e 68,791",
+    "5 Total of head wise income (1 + 2 + 3e + 4d) 5 43,94,443",
+    "6 Losses of current year set off against 5 (total of 2xiii and 3xiii of Schedule CYLA) 6 0",
+    "8 Brought forward losses set off against 7 ( 2xii of Schedule BFLA) 8 0",
     "9 Gross Total income (7-8) (3xiii of Schedule BFLA + 2 of Schedule OS ) 9 43,94,443",
     "11 Deductions under Chapter VI-A [v of Schedule VIA and limited to (9-10)] 11 0",
     "12 Total income (9 - 11) 12 43,94,440",
@@ -211,8 +217,14 @@ const ITR2_WRAPPED_LINES = [
     "2 Tax payable on total income 2",
     "d Tax Payable on Total Income (2a + 2b -2c) 2d 8,77,696",
     "c Health and Education Cess @ 4% on (1a+1b) above 1c 0",
+    "3 Rebate under section 87A 3 0",
+    "4 Tax Payable after rebate (2d-3) 4 8,77,696",
+    "5 Surcharge 5",
+    "ii 10% or 15% as applicable 5ii 0",
+    "iii Total (ia + iia) 5iii 0",
     "6 Health and Education cess @ 4% on (4 + 5iv) 6 35,108",
     "7 Gross tax liability (4 + 5iv + 6) 7 9,12,804",
+    "12 Net tax liability (10-11d) (enter zero if negative) 12 9,12,804",
     "a Interest for default in furnishing the return (section 234A) 13a 0",
     "Interest for default in payment of advance tax (section 234B) 13b",
     "b 0",
@@ -220,6 +232,8 @@ const ITR2_WRAPPED_LINES = [
     "b TDS (total of column 5 of 20B and column 9 of 20C) 15b 9,26,670",
     "c TCS (total of column 7(i) of 20D) 15cc 0",
     "d Self Assessment Tax (from column 5 of 20A) 15d 0",
+    "e Total Interest and Fee Payable (13a+13b+13c+13d+13da) 13e 0",
+    "14 Aggregate liability (12+13e) 14 9,12,804",
     "e Total Taxes Paid (15a+15b+15c+15d) 15e 9,26,670",
     "16 Amount payable (Enter if 14 is greater than 15e, else enter 0) 16 0",
     "17 Refund (If 15e is greater than 14) 17 13,870",
@@ -265,6 +279,59 @@ describe("parseItrLines on the wrapped real-world layout", () => {
         expect(data.totalTaxPaid).toBe(926670);
         expect(data.refundDue).toBe(13870);
         expect(data.taxPayable).toBe(0);
+    });
+});
+
+describe("audit rows and the equations they close", () => {
+    it("reads the surcharge roll-up, not the 115JC surcharge row", () => {
+        expect(parseItrLines(ITR2_WRAPPED_LINES).data.surcharge).toBe(0);
+        expect(parseItrLines(ITR2_WRAPPED_LINES).matchedLines.surcharge).toMatch(/5iii/);
+    });
+
+    it("confirms both capital gains figures against the 3c roll-up", () => {
+        const r = parseItrLines(ITR2_WRAPPED_LINES);
+        expect(r.confidence.capitalGainsStcg).toBe("confirmed");
+        expect(r.confidence.capitalGainsLtcg).toBe("confirmed");
+    });
+
+    it("confirms tax on total income against the after-rebate row", () => {
+        expect(parseItrLines(ITR2_WRAPPED_LINES).confidence.taxOnTotalIncome).toBe("confirmed");
+    });
+
+    it("confirms the gross tax liability build-up", () => {
+        const r = parseItrLines(ITR2_WRAPPED_LINES);
+        expect(r.confidence.totalTaxLiability).toBe("confirmed");
+        expect(r.confidence.cess).toBe("confirmed");
+        expect(r.confidence.surcharge).toBe("confirmed");
+    });
+
+    it("confirms the head-wise income total feeds gross total income", () => {
+        const r = parseItrLines(ITR2_WRAPPED_LINES);
+        expect(r.confidence.salaryIncome).toBe("confirmed");
+        expect(r.confidence.otherSourcesIncome).toBe("confirmed");
+        expect(r.confidence.grossTotalIncome).toBe("confirmed");
+    });
+
+    it("reconciles the refund against liability minus taxes paid", () => {
+        const r = parseItrLines(ITR2_WRAPPED_LINES);
+        expect(r.confidence.refundDue).toBe("confirmed");
+        expect(r.issues).toEqual([]);
+    });
+
+    it("keeps audit rows out of the saved payload's own fields", () => {
+        const { data } = parseItrLines(ITR2_WRAPPED_LINES);
+        expect(data.capitalGainsTotal).toBe(68791);
+        expect(data.aggregateLiability).toBe(912804);
+        expect(data.rebate87A).toBe(0);
+    });
+
+    it("flags a capital gains figure that contradicts the 3c roll-up", () => {
+        const broken = ITR2_WRAPPED_LINES.map((l) =>
+            /^iii biii/.test(l) ? "iii biii 99,999" : l,
+        );
+        const r = parseItrLines(broken);
+        expect(r.confidence.capitalGainsLtcg).toBe("conflict");
+        expect(r.issues.some((i) => i.fields.includes("capitalGainsLtcg"))).toBe(true);
     });
 });
 
