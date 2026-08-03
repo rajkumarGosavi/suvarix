@@ -35,7 +35,7 @@ export interface ItrReturn {
     refundDue: number;
     taxPayable: number;
 
-    source: "pdf" | "manual" | string;
+    source: "pdf" | "json" | "manual" | string;
 }
 
 export interface ItrSummary {

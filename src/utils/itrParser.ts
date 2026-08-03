@@ -379,11 +379,15 @@ const INVARIANTS: Invariant[] = [
         ],
     },
     {
-        equation: "Total head-wise income (5) = salary + house property + 3e + other sources",
+        equation:
+            "Total head-wise income (5) = salary + house property + business + 3e + other sources",
         total: "totalHeadwiseIncome",
         terms: [
             { field: "salaryIncome", sign: 1 },
             { field: "housePropertyIncome", sign: 1 },
+            // Zero on ITR-2 (no such head) — see `assumeNoBusinessHead`. On ITR-3 this
+            // is often the only way the business figure is recovered at all.
+            { field: "businessIncome", sign: 1 },
             { field: "capitalGainsTotal", sign: 1 },
             { field: "otherSourcesIncome", sign: 1 },
         ],
@@ -450,6 +454,18 @@ const INVARIANTS: Invariant[] = [
         ],
     },
 ];
+
+/**
+ * Forms with no profits-and-gains head at all. On these a missing business figure
+ * is a fact about the form, not a failed reading — and saying so keeps the
+ * head-wise equation down to one unknown so it can still be solved.
+ */
+const FORMS_WITHOUT_BUSINESS_HEAD = new Set(["ITR-1", "ITR-2"]);
+
+/** True when `formType` cannot carry business income. Unknown form → false. */
+export function assumeNoBusinessHead(formType: string | null): boolean {
+    return formType !== null && FORMS_WITHOUT_BUSINESS_HEAD.has(formType);
+}
 
 /**
  * Section 288A rounds total income to the nearest ten rupees, so an equation can
@@ -594,6 +610,12 @@ export function parseItrLines(lines: string[]): ItrParseResult {
 
     for (const key of ["panMasked", "filingDate", "ackNumber", "regime"] as const) {
         confidence[key] = data[key] === undefined ? "missing" : "parsed";
+    }
+
+    if (data.businessIncome === undefined && assumeNoBusinessHead(formType)) {
+        data.businessIncome = 0;
+        confidence.businessIncome = "parsed";
+        matchedLines.businessIncome = `(no business head on ${formType})`;
     }
 
     const checked = applyInvariants(data, confidence);
