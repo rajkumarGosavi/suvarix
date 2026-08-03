@@ -23,7 +23,7 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 const store = useBudgetStore();
 const categoriesStore = useCategoriesStore();
 const confirm = useConfirm();
-const { formatINR, formatCompact } = useCurrencyFormat();
+const { formatINR, chartTick } = useCurrencyFormat();
 const { textColor, mutedColor, gridColor } = useChartColors();
 
 const PERIODS = [
@@ -96,7 +96,7 @@ const trendChartOptions = computed(() => ({
             border: { color: gridColor.value },
         },
         y: {
-            ticks: { color: mutedColor.value, callback: (v: any) => formatCompact(Number(v)) },
+            ticks: { color: mutedColor.value, callback: chartTick.value },
             grid: { color: gridColor.value },
             border: { color: gridColor.value },
         },

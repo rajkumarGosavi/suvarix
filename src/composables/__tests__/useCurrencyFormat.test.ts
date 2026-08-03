@@ -76,4 +76,25 @@ describe("useCurrencyFormat", () => {
       expect(f.formatPercent(12.34)).not.toContain("12.34");
     });
   });
+
+  // A Chart.js tick callback is invoked at draw time, so it cannot pick the flag
+  // up by itself; the callback identity has to change for the axis to redraw.
+  describe("chartTick", () => {
+    it("formats the tick like formatCompact", () => {
+      const { chartTick } = useCurrencyFormat();
+      expect(chartTick.value(1e7)).toBe("₹1.00Cr");
+      expect(chartTick.value("250000")).toBe("₹2.50L");
+    });
+
+    it("hands out a new callback when privacy mode is toggled", () => {
+      const ui = useUiStore();
+      const { chartTick } = useCurrencyFormat();
+      const before = chartTick.value;
+
+      ui.hideAmounts = true;
+
+      expect(chartTick.value).not.toBe(before);
+      expect(chartTick.value(1e7)).not.toContain("Cr");
+    });
+  });
 });

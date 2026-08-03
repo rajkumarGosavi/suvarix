@@ -18,6 +18,8 @@ const percentFormatter = new Intl.NumberFormat("en-IN", {
     maximumFractionDigits: 2,
 });
 
+import { computed } from "vue";
+
 import { useUiStore } from "@/stores/ui";
 
 const MASK = "₹ ••••••";
@@ -45,5 +47,23 @@ export function useCurrencyFormat() {
         return inrFormatter.format(value);
     };
 
-    return { formatINR, formatINRDecimal, formatPercent, formatChange, formatCompact };
+    /**
+     * Axis-tick formatter for Chart.js, handed out as a computed *value*.
+     *
+     * The formatters above are reactive only because a template re-renders and
+     * calls them again. A Chart.js tick callback is different: it is stored inside
+     * the options object and invoked at draw time, so reading `hideAmounts` inside
+     * it registers no dependency and the axis keeps whatever it drew first — the
+     * mask stayed on long after privacy mode was switched off.
+     *
+     * Taking `chartTick.value` while building a computed options object is what
+     * ties the chart to the flag: the toggle produces a new callback, hence a new
+     * options object, hence a redraw.
+     */
+    const chartTick = computed(() => {
+        const masked = ui.hideAmounts;
+        return (value: unknown) => (masked ? MASK : formatCompact(Number(value)));
+    });
+
+    return { formatINR, formatINRDecimal, formatPercent, formatChange, formatCompact, chartTick };
 }

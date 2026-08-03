@@ -19,7 +19,7 @@ import ItrImportDialog from "@/components/reports/ItrImportDialog.vue";
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Title, Tooltip, Legend);
 
 const store = useItrStore();
-const { formatINR, formatCompact } = useCurrencyFormat();
+const { formatINR, chartTick } = useCurrencyFormat();
 const { textColor, mutedColor, gridColor } = useChartColors();
 
 const dialogVisible = ref(false);
@@ -130,7 +130,7 @@ const stackedOptions = computed(() => ({
         x: { stacked: true, ticks: { color: mutedColor.value }, grid: { color: gridColor.value } },
         y: {
             stacked: true,
-            ticks: { color: mutedColor.value, callback: (v: any) => formatCompact(Number(v)) },
+            ticks: { color: mutedColor.value, callback: chartTick.value },
             grid: { color: gridColor.value },
         },
     },
@@ -175,8 +175,8 @@ async function onSaved() {
 <template>
     <div class="itr-panel">
         <div class="tab-toolbar">
-            <Button label="Import ITR PDF" icon="pi pi-file-import" @click="openImport" />
-            <span class="toolbar-note">ITR-2, parsed on this device</span>
+            <Button label="Import ITR" icon="pi pi-file-import" @click="openImport" />
+            <span class="toolbar-note">ITR-2 / ITR-3 PDF or JSON, parsed on this device</span>
         </div>
 
         <div v-if="store.isLoading" class="empty">
@@ -186,7 +186,7 @@ async function onSaved() {
         <div v-else-if="!store.returns.length" class="empty">
             <i class="pi pi-file-pdf empty-icon" />
             <p>No returns imported yet.</p>
-            <Button label="Import ITR PDF" icon="pi pi-file-import" @click="openImport" />
+            <Button label="Import ITR" icon="pi pi-file-import" @click="openImport" />
         </div>
 
         <template v-else>
