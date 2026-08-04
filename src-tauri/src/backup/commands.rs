@@ -1839,6 +1839,76 @@ mod tests {
         assert_eq!(count, 0, "delete must propagate, not be resurrected by the union");
     }
 
+    fn insert_itr_return(db: &crate::db::DbPool, ay: &str, salary: f64) {
+        db.get()
+            .unwrap()
+            .execute(
+                "INSERT INTO itr_returns
+                 (assessment_year, form_type, salary_income, gross_total_income, total_income,
+                  total_tax_paid, source, created_at, updated_at)
+                 VALUES (?1, 'ITR-3', ?2, ?2, ?2, 270000, 'json', datetime('now'), datetime('now'))",
+                params![ay, salary],
+            )
+            .unwrap();
+    }
+
+    /// `itr_returns` joined `SYNC_TABLES` long after MIGRATION_018/020 ran on every
+    /// existing install, so its sync columns come from MIGRATION_027 and its triggers
+    /// from the 019/021 loops. Get any of that wrong and the table either exports rows
+    /// with a NULL `sync_id` (which merge cannot match) or is missing from the payload
+    /// entirely — either way a return imported on the desktop never reaches the phone,
+    /// which is the whole point of adding it.
+    #[test]
+    fn itr_return_syncs_to_the_other_device() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        insert_itr_return(&db_a, "2026-27", 1_250_000.0);
+
+        let sync_id: Option<String> = db_a
+            .get()
+            .unwrap()
+            .query_row("SELECT sync_id FROM itr_returns", [], |r| r.get(0))
+            .unwrap();
+        assert!(sync_id.is_some(), "insert trigger must stamp sync_id");
+
+        let payload = build_backup_payload(&db_a.get().unwrap()).unwrap().0;
+        assert!(payload.tables.contains_key("itr_returns"), "table must be in the payload");
+
+        apply_backup_payload(&db_b, &payload).unwrap();
+
+        let conn = db_b.get().unwrap();
+        let (ay, salary, remote_sync_id): (String, f64, Option<String>) = conn
+            .query_row("SELECT assessment_year, salary_income, sync_id FROM itr_returns", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(ay, "2026-27");
+        assert_eq!(salary, 1_250_000.0);
+        assert_eq!(remote_sync_id, sync_id, "the row must keep its cross-device identity");
+    }
+
+    /// `assessment_year` is UNIQUE, so two devices that each imported the same return
+    /// before ever syncing hold the same year under different `sync_id`s. The insert
+    /// must be skipped, not blow up the whole merge — the row already exists in
+    /// substance, exactly like the default milestone rows.
+    #[test]
+    fn same_assessment_year_on_both_devices_does_not_fail_the_merge() {
+        let (_dir_a, db_a) = test_db_pool();
+        let (_dir_b, db_b) = test_db_pool();
+        insert_itr_return(&db_a, "2026-27", 1_250_000.0);
+        insert_itr_return(&db_b, "2026-27", 1_250_000.0);
+
+        let payload = build_backup_payload(&db_a.get().unwrap()).unwrap().0;
+        apply_backup_payload(&db_b, &payload).expect("merge must not fail on a UNIQUE collision");
+
+        let count: i64 = db_b
+            .get()
+            .unwrap()
+            .query_row("SELECT count(*) FROM itr_returns WHERE assessment_year = '2026-27'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "the year must not be duplicated");
+    }
+
     /// When both devices edited the same row (same `sync_id`) independently,
     /// the one with the newer `sync_updated_at` must win — the legacy
     /// (pre-HLC, or peer-hasn't-upgraded) comparison path. `sync_hlc` is

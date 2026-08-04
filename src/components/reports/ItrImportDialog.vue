@@ -10,6 +10,7 @@ import {
     type ItrParseResult,
     type ParsedItr,
 } from "@/utils/itrParser";
+import { ItrJsonUnsupported, parseItrJson } from "@/utils/itrJsonParser";
 import { useItrStore, type ItrReturn } from "@/stores/itr";
 
 const props = defineProps<{ visible: boolean; editing?: ItrReturn | null }>();
@@ -20,6 +21,8 @@ const store = useItrStore();
 // "pick" → choose a file (or skip straight to manual entry), "review" → editable form
 const stage = ref<"pick" | "review">("pick");
 const file = ref<File | null>(null);
+/** ITD JSON (portal "Download JSON" / offline utility) rather than the acknowledgement PDF. */
+const isJson = computed(() => /\.json$/i.test(file.value?.name ?? ""));
 const password = ref("");
 const needsPassword = ref(false);
 const passwordAttempts = ref(0);
@@ -144,7 +147,7 @@ const isEditing = computed(() => !!props.editing?.id);
 const dialogTitle = computed(() =>
     isEditing.value
         ? `Edit AY ${props.editing?.assessmentYear}`
-        : stage.value === "pick" ? "Import ITR PDF" : "Review before saving",
+        : stage.value === "pick" ? "Import ITR" : "Review before saving",
 );
 
 const canSave = computed(() => /^\d{4}-\d{2}$/.test(form.value.assessmentYear.trim()));
@@ -188,9 +191,14 @@ function onFileSelect(event: any) {
     parseError.value = "";
 }
 
-function applyParsed(data: ParsedItr, formType: string | null, assessmentYear: string | null) {
+function applyParsed(
+    data: ParsedItr,
+    formType: string | null,
+    assessmentYear: string | null,
+    source: "pdf" | "json",
+) {
     const next = blankReturn();
-    next.source = "pdf";
+    next.source = source;
     next.formType = formType ?? "ITR-2";
     next.assessmentYear = assessmentYear ?? "";
     next.regime = data.regime ?? null;
@@ -221,27 +229,44 @@ async function runParse() {
     parsing.value = true;
     parseError.value = "";
     try {
-        const result = await parseItrPdf(await file.value.arrayBuffer(), password.value.trim());
+        // The JSON is the department's own structured payload, so it is read by
+        // schema path and never needs the text-scraping rules the PDF does.
+        const result = isJson.value
+            ? parseItrJson(await file.value.text())
+            : await parseItrPdf(await file.value.arrayBuffer(), password.value.trim());
         await writeDebugLog(result);
         if (!result.formType && !result.assessmentYear) {
             parseError.value =
-                "This does not look like an ITR PDF — no form type or assessment year found. " +
-                "Use the filed ITR-2 PDF downloaded from the e-filing portal.";
+                "This does not look like an ITR file — no form type or assessment year found. " +
+                "Use the filed ITR-2 PDF or JSON downloaded from the e-filing portal.";
             return;
         }
-        if (result.formType && result.formType !== "ITR-2") {
+        if (result.formType === "ITR-3") {
+            // Only ITR-2's schema has been checked against a real return, so the one
+            // field ITR-3 adds is the one worth a second look.
             parseError.value =
-                `Detected ${result.formType}. Only ITR-2 layouts are tuned, so check every ` +
-                "field below before saving.";
+                "ITR-3 detected. Everything below is read the same way as ITR-2 — only " +
+                "check the business / profession figure against your return before saving.";
+        } else if (result.formType && result.formType !== "ITR-2") {
+            parseError.value =
+                `Detected ${result.formType}. Only ITR-2 and ITR-3 layouts are tuned, so ` +
+                "check every field below before saving.";
         }
         needsPassword.value = false;
         rawLines.value = result.rawLines;
         confidence.value = result.confidence;
         issues.value = result.issues;
-        applyParsed(result.data, result.formType, result.assessmentYear);
+        applyParsed(
+            result.data,
+            result.formType,
+            result.assessmentYear,
+            isJson.value ? "json" : "pdf",
+        );
         stage.value = "review";
     } catch (e: any) {
-        if (e instanceof ItrPasswordRequired) {
+        if (e instanceof ItrJsonUnsupported) {
+            parseError.value = e.message;
+        } else if (e instanceof ItrPasswordRequired) {
             needsPassword.value = true;
             passwordAttempts.value += 1;
             parseError.value =
@@ -296,20 +321,22 @@ function close() {
         <!-- Stage 1: pick a PDF -->
         <div v-if="stage === 'pick'" class="pick">
             <p class="hint">
-                Select the ITR-2 PDF you downloaded from the income-tax e-filing portal.
-                It is parsed on this device only — nothing leaves the app.
+                Select the ITR-2 or ITR-3 acknowledgement PDF, or the JSON from
+                <em>Download JSON</em> on the e-filing portal — the JSON is the
+                department's own structured file and imports exactly, with nothing to
+                verify by eye. Either is parsed on this device only; nothing leaves the app.
             </p>
 
             <FileUpload
                 mode="basic"
-                accept="application/pdf"
+                accept="application/pdf,application/json,.pdf,.json"
                 :auto="false"
-                choose-label="Choose ITR PDF"
+                choose-label="Choose ITR PDF or JSON"
                 custom-upload
                 @select="onFileSelect"
             />
 
-            <div v-if="needsPassword" class="pw">
+            <div v-if="needsPassword && !isJson" class="pw">
                 <label for="itr-pw">PDF password</label>
                 <Password
                     id="itr-pw"
@@ -324,9 +351,9 @@ function close() {
 
             <div class="pick-actions">
                 <Button
-                    label="Parse PDF"
-                    icon="pi pi-file-pdf"
-                    :disabled="!file || parsing || passwordAttempts >= 3"
+                    :label="isJson ? 'Read JSON' : 'Parse PDF'"
+                    :icon="isJson ? 'pi pi-code' : 'pi pi-file-pdf'"
+                    :disabled="!file || parsing || (!isJson && passwordAttempts >= 3)"
                     :loading="parsing"
                     @click="runParse"
                 />

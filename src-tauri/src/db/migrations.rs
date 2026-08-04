@@ -42,8 +42,19 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(MIGRATION_016);
     // MIGRATION_017: reminder-scheduler dedup state — INSERT OR IGNORE is idempotent
     conn.execute_batch(MIGRATION_017).map_err(|e| AppError::Database(e.to_string()))?;
+    // MIGRATION_026 runs here, out of numeric order, because `itr_returns` is in
+    // `SYNC_TABLES`: MIGRATION_019/021 create that table's sync triggers and would
+    // fail hard on a fresh database if the table did not exist yet. CREATE TABLE
+    // IF NOT EXISTS, so running it early changes nothing for an existing database.
+    conn.execute_batch(MIGRATION_026).map_err(|e| AppError::Database(e.to_string()))?;
     // MIGRATION_018 uses ALTER TABLE which is not idempotent — ignore "duplicate column" errors
     let _ = conn.execute_batch(&migration_018_add_sync_columns());
+    // MIGRATION_027 gives `itr_returns` its sync columns on a database that already
+    // ran MIGRATION_018/020 — those batches abort on the first duplicate-column
+    // error, long before reaching a table added to `SYNC_TABLES` later. ALTER TABLE,
+    // so not idempotent: on a fresh database 018/020 got there first and this whole
+    // batch fails on its first statement, which is exactly the intended no-op.
+    let _ = conn.execute_batch(MIGRATION_027);
     // MIGRATION_019: sync_tombstones table + backfill + triggers — CREATE ... IF NOT EXISTS
     // and UPDATE ... WHERE col IS NULL throughout, safe to re-run.
     conn.execute_batch(&migration_019_sync_infra()).map_err(|e| AppError::Database(e.to_string()))?;
@@ -65,8 +76,6 @@ pub fn run_migrations(conn: &Connection) -> Result<()> {
     // MIGRATION_025: opt-in savings challenges — gamification-only, CREATE ... IF NOT EXISTS, idempotent.
     #[cfg(feature = "gamification")]
     conn.execute_batch(MIGRATION_025).map_err(|e| AppError::Database(e.to_string()))?;
-    // MIGRATION_026: filed ITR returns — CREATE TABLE IF NOT EXISTS, idempotent.
-    conn.execute_batch(MIGRATION_026).map_err(|e| AppError::Database(e.to_string()))?;
     tracing::debug!("migrations complete");
     Ok(())
 }
@@ -123,9 +132,11 @@ CREATE TABLE IF NOT EXISTS user_challenges (
 CREATE INDEX IF NOT EXISTS idx_user_challenges_status ON user_challenges(status);
 ";
 
-// Filed income-tax returns (ITR-2), one row per assessment year, imported from the
-// user's own ITR PDF or entered by hand. Read-only reporting data — deliberately
-// outside SYNC_TABLES (not part of the .svbak merge set) for now.
+// Filed income-tax returns (ITR-2/ITR-3), one row per assessment year, imported
+// from the user's own ITR PDF or JSON, or entered by hand. In SYNC_TABLES since
+// 0.6.37 — a return filed once should be readable on every device, and importing
+// the same file again on a phone is busywork. See MIGRATION_027 for the sync
+// columns and `run_migrations` for why this table is created before MIGRATION_018.
 const MIGRATION_026: &str = "
 CREATE TABLE IF NOT EXISTS itr_returns (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,7 +203,19 @@ pub(crate) const SYNC_TABLES: &[&str] = &[
     "bills",
     "recurring_transactions",
     "milestones",
+    // No FK columns, so its position in this FK-ordered list does not matter.
+    "itr_returns",
 ];
+
+// Sync columns for `itr_returns`, which joined SYNC_TABLES after MIGRATION_018/020
+// had already run on every existing install. Kept as its own batch (rather than
+// relying on those two) precisely because `execute_batch` stops at the first error,
+// and on an existing database their very first ALTER is a duplicate-column failure.
+const MIGRATION_027: &str = "
+ALTER TABLE itr_returns ADD COLUMN sync_id TEXT;
+ALTER TABLE itr_returns ADD COLUMN sync_updated_at TEXT;
+ALTER TABLE itr_returns ADD COLUMN sync_hlc TEXT;
+";
 
 /// Adds the two bookkeeping columns every synced table needs for merge (as opposed
 /// to wholesale-replace) sync: `sync_id` is a globally-unique row identity that
@@ -931,6 +954,47 @@ mod tests {
             [], |r| r.get(0),
         ).unwrap();
         assert_eq!(gross, 0.0);
+    }
+
+    /// The upgrade path onto sync: `itr_returns` shipped in 0.6.35 without sync
+    /// columns, and MIGRATION_018/020 cannot retrofit them because `execute_batch`
+    /// aborts on their first duplicate-column error, several tables earlier.
+    /// MIGRATION_027 exists solely to cover that gap, and 019/021 then build the
+    /// triggers — without both, an upgraded install would export ITR rows that no
+    /// other device could match.
+    #[test]
+    fn migration_027_retrofits_sync_columns_onto_a_pre_sync_itr_table() {
+        let (_dir, pool) = test_db_pool();
+        let conn = pool.get().unwrap();
+
+        // Put the table back the way 0.6.35 shipped it: no sync columns, and
+        // (since DROP TABLE takes them with it) no sync triggers either.
+        conn.execute_batch("DROP TABLE itr_returns;").unwrap();
+        conn.execute_batch(MIGRATION_026).unwrap();
+
+        run_migrations(&conn).expect("a second migration run must recover the table");
+
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('itr_returns')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        for expected in ["sync_id", "sync_updated_at", "sync_hlc"] {
+            assert!(cols.iter().any(|c| c == expected), "missing column {expected}: {cols:?}");
+        }
+
+        conn.execute(
+            "INSERT INTO itr_returns (assessment_year, form_type, created_at, updated_at)
+             VALUES ('2025-26', 'ITR-2', datetime('now'), datetime('now'))",
+            [],
+        )
+        .unwrap();
+        let sync_id: Option<String> = conn
+            .query_row("SELECT sync_id FROM itr_returns", [], |r| r.get(0))
+            .unwrap();
+        assert!(sync_id.is_some(), "the insert trigger must have been recreated too");
     }
 
     #[test]
