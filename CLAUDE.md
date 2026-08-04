@@ -89,6 +89,8 @@ Modules map 1:1 to domains:
 
 Numbered files loaded in order at startup by `db::run_migrations()`. Add new migrations as `MIGRATION_0NN` — never edit existing ones. MIGRATION_010 and MIGRATION_016 are wrapped with `let _ =` (ALTER TABLE, not idempotent). MIGRATION_014 is compiled only with `#[cfg(feature = "gamification")]`. MIGRATION_017 seeds `notified_reminder_ids` (idempotent `INSERT OR IGNORE`).
 
+Adding a table to `SYNC_TABLES` costs two extra steps, both learned from `itr_returns` (MIGRATION_026/027): the `CREATE TABLE` must run *before* MIGRATION_018, since the 019/021 loops build that table's sync triggers and fail hard if it does not exist yet; and existing installs need their own `ALTER TABLE … ADD COLUMN sync_id / sync_updated_at / sync_hlc` migration, because MIGRATION_018/020 run through `execute_batch`, which aborts on the first duplicate-column error long before reaching a newly-listed table.
+
 ### Currency formatting
 
 Always use `useCurrencyFormat` composable for INR display. Format: ₹X.xxCr (≥1Cr), ₹X.xxL (≥1L), else standard en-IN locale.
