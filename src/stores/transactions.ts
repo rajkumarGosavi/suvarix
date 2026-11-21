@@ -11,6 +11,8 @@ export interface TransactionFilter {
     search?: string;
     sortBy?: "date" | "amount";
     sortDir?: "asc" | "desc";
+    /** "manual" | "verified" (manual, confirmed by bank import) | "imported" */
+    origin?: "manual" | "verified" | "imported";
     limit?: number;
     offset?: number;
 }

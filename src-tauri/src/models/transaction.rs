@@ -56,4 +56,7 @@ pub struct TransactionFilter {
     pub sort_dir: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// "manual" | "verified" (manual row confirmed by a bank import) | "imported".
+    #[serde(default)]
+    pub origin: Option<String>,
 }
