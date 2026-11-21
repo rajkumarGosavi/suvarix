@@ -216,6 +216,7 @@ pub fn run() {
             transactions::csv_import::preview_transaction_csv,
             transactions::csv_import::import_transactions_csv,
             transactions::bank_import::import_bank_statement,
+            transactions::bank_import::find_bank_import_matches,
             // categories
             categories::commands::list_categories,
             categories::commands::add_category,

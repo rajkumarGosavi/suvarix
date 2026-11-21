@@ -28,6 +28,16 @@ fn filter_where_clause(filter: &TransactionFilter) -> (String, Vec<Box<dyn rusql
         params.push(Box::new(pattern.clone()));
         params.push(Box::new(pattern));
     }
+    // Whitelisted origin filter (no params needed). `source` defaults to 'manual'
+    // but legacy rows may hold NULL; bank merges keep 'manual' and gain an external_ref.
+    const IS_MANUAL: &str = "(source IS NULL OR source='manual')";
+    const HAS_REF: &str = "(external_ref IS NOT NULL AND external_ref<>'')";
+    match filter.origin.as_deref() {
+        Some("manual") => sql.push_str(&format!(" AND {IS_MANUAL} AND NOT {HAS_REF}")),
+        Some("verified") => sql.push_str(&format!(" AND {IS_MANUAL} AND {HAS_REF}")),
+        Some("imported") => sql.push_str(&format!(" AND NOT {IS_MANUAL}")),
+        _ => {}
+    }
     (sql, params)
 }
 
@@ -166,7 +176,7 @@ mod tests {
         let txns = list_transactions_impl(&conn, &TransactionFilter {
             r#type: None, asset_class: None, account_id: None, category: None,
             date_from: None, date_to: None, search: None, sort_by: None, sort_dir: None,
-            limit: None, offset: None,
+            limit: None, offset: None, origin: None,
         }).unwrap();
         let saved = txns.iter().find(|t| t.id == id).expect("just-inserted transaction should be listed");
         assert_eq!(saved.tag, Some("House".to_string()));
@@ -197,7 +207,7 @@ mod tests {
         let filter = TransactionFilter {
             r#type: None, asset_class: None, account_id: None, category: None,
             date_from: None, date_to: None, search: Some("House".into()),
-            sort_by: None, sort_dir: None, limit: None, offset: None,
+            sort_by: None, sort_dir: None, limit: None, offset: None, origin: None,
         };
         let txns = list_transactions_impl(&conn, &filter).unwrap();
         assert_eq!(txns.len(), 1);

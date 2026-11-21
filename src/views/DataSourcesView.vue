@@ -446,11 +446,93 @@ const bankId = ref<BankId>('hdfc');
 const bankRows = ref<BankTxnRow[]>([]);
 const bankRawGrid = ref<string[][]>([]);
 const bankImporting = ref(false);
-const bankImportResult = ref<ImportResult | null>(null);
+const bankImportResult = ref<(ImportResult & { merged: number }) | null>(null);
 const bankError = ref<string | null>(null);
 
+// Possible-duplicate matching against manual entries (±window days, same type + amount).
+interface BankMatchCandidate {
+    id: number; date: string; amount: number;
+    description: string | null; category: string | null; dayDiff: number;
+}
+interface BankRowMatch { index: number; alreadyImported: boolean; candidates: BankMatchCandidate[] }
+const bankMatchWindow = ref(3);
+const bankMatchWindowOptions = [
+    { label: '±3 days', value: 3 }, { label: '±5 days', value: 5 }, { label: '±7 days', value: 7 },
+];
+const bankMatches = ref<Record<number, BankRowMatch>>({});
+// Per row: 'new' (import as new) | 'skip' | `m:<manualId>` (merge into that manual entry).
+const bankChoice = ref<Record<number, string>>({});
+const bankMatching = ref(false);
+
 const bankCategoryOptions = computed(() => categoriesStore.names);
-const bankIncludedCount = computed(() => bankRows.value.filter(r => r.include).length);
+const bankIncludedCount = computed(() =>
+    bankRows.value.filter((r, i) => r.include && bankChoice.value[i] !== 'skip').length);
+const bankPossibleDupCount = computed(() =>
+    Object.values(bankMatches.value).filter(m => m.candidates.length > 0).length);
+const bankMergeCount = computed(() =>
+    bankRows.value.filter((r, i) => r.include && bankChoice.value[i]?.startsWith('m:')).length);
+
+function bankRowPayload(r: BankTxnRow) {
+    return {
+        date: `${r.date} 00:00:00`,
+        amount: Math.abs(r.amount),
+        txnType: r.type,
+        category: r.category || null,
+        description: r.narration || null,
+        refNo: r.refNo ?? null,
+        tag: r.tag,
+    };
+}
+
+async function loadBankMatches() {
+    bankMatching.value = true;
+    try {
+        const res = await invoke<BankRowMatch[]>('find_bank_import_matches', {
+            source: `bank_${bankId.value}`,
+            windowDays: bankMatchWindow.value,
+            rows: bankRows.value.map(bankRowPayload),
+        });
+        const matches: Record<number, BankRowMatch> = {};
+        const choice: Record<number, string> = {};
+        const claimed = new Set<number>();
+        // Greedy default: each row merges into its closest unclaimed manual entry.
+        for (const m of res) {
+            matches[m.index] = m;
+            const pick = m.candidates.find(c => !claimed.has(c.id));
+            if (pick) { claimed.add(pick.id); choice[m.index] = `m:${pick.id}`; }
+            else choice[m.index] = 'new';
+        }
+        bankMatches.value = matches;
+        bankChoice.value = choice;
+    } catch (e: any) {
+        // Matching is advisory — import still works with exact dedup only.
+        bankMatches.value = {};
+        bankChoice.value = {};
+        bankError.value = `Duplicate check failed: ${e?.message ?? e}`;
+    } finally {
+        bankMatching.value = false;
+    }
+}
+
+function bankChoiceOptions(index: number) {
+    const m = bankMatches.value[index];
+    const claimedByOthers = new Set(
+        Object.entries(bankChoice.value)
+            .filter(([i, v]) => Number(i) !== index && v.startsWith('m:') && bankRows.value[Number(i)]?.include)
+            .map(([, v]) => Number(v.slice(2))),
+    );
+    const merges = (m?.candidates ?? []).map(c => ({
+        label: `Merge → ${c.date.slice(0, 10)} · ${c.description || c.category || 'manual entry'}`
+            + (c.dayDiff ? ` (${c.dayDiff}d)` : ''),
+        value: `m:${c.id}`,
+        disabled: claimedByOthers.has(c.id),
+    }));
+    return [
+        ...merges,
+        { label: 'Import as new', value: 'new', disabled: false },
+        { label: 'Skip', value: 'skip', disabled: false },
+    ];
+}
 
 function bankReset() {
     bankStep.value = 1;
@@ -459,6 +541,8 @@ function bankReset() {
     bankRawGrid.value = [];
     bankImportResult.value = null;
     bankError.value = null;
+    bankMatches.value = {};
+    bankChoice.value = {};
 }
 
 async function onBankFile(event: any) {
@@ -479,6 +563,7 @@ async function onBankFile(event: any) {
         }
         bankRows.value = rows;
         bankStep.value = 2;
+        await loadBankMatches();
     } catch (err: any) {
         bankError.value = `Parse error: ${err?.message ?? err}`;
     }
@@ -492,11 +577,15 @@ const bankPreviewRows = computed(() =>
         amount: formatINR(Math.abs(r.amount)),
         narration: r.narration || '—',
         refNo: r.refNo || '—',
+        alreadyImported: bankMatches.value[i]?.alreadyImported ?? false,
+        hasMatch: (bankMatches.value[i]?.candidates.length ?? 0) > 0,
     })),
 );
 
 async function importBankStatement() {
-    const selected = bankRows.value.filter(r => r.include);
+    const selected = bankRows.value
+        .map((r, i) => ({ r, choice: bankChoice.value[i] ?? 'new' }))
+        .filter(({ r, choice }) => r.include && choice !== 'skip');
     if (selected.length === 0) {
         bankError.value = "No rows selected to import.";
         return;
@@ -504,21 +593,18 @@ async function importBankStatement() {
     bankImporting.value = true;
     bankError.value = null;
     try {
-        const result = await invoke<ImportResult>('import_bank_statement', {
+        const result = await invoke<ImportResult & { merged: number }>('import_bank_statement', {
             source: `bank_${bankId.value}`,
-            rows: selected.map(r => ({
-                date: `${r.date} 00:00:00`,
-                amount: Math.abs(r.amount),
-                txnType: r.type,
-                category: r.category || null,
-                description: r.narration || null,
-                refNo: r.refNo ?? null,
-                tag: r.tag,
+            rows: selected.map(({ r, choice }) => ({
+                ...bankRowPayload(r),
+                mergeInto: choice.startsWith('m:') ? Number(choice.slice(2)) : null,
             })),
         });
         bankImportResult.value = result;
         bankStep.value = 3;
-        track('bank_statement_import', { bank: bankId.value, imported: result.imported, skipped: result.skipped });
+        track('bank_statement_import', {
+            bank: bankId.value, imported: result.imported, skipped: result.skipped, merged: result.merged,
+        });
     } catch (e: any) {
         bankError.value = String(e?.message ?? e);
     } finally {
@@ -1707,6 +1793,24 @@ function formatTime(iso: string | null): string {
                     (credit-card payments, investment moves) so they don't pollute your reports, and edit
                     any category before importing. Debits import as expenses, credits as income.
                 </p>
+                <div class="bank-match-bar">
+                    <Message v-if="bankPossibleDupCount" severity="warn" class="bank-match-msg">
+                        {{ bankPossibleDupCount }} row(s) look like entries you already added manually
+                        (same type and amount, nearby date). Merging marks your entry as bank-verified
+                        instead of creating a duplicate.
+                    </Message>
+                    <div class="bank-match-window">
+                        <label>Match window</label>
+                        <Select
+                            v-model="bankMatchWindow"
+                            :options="bankMatchWindowOptions"
+                            optionLabel="label"
+                            optionValue="value"
+                            :loading="bankMatching"
+                            @change="loadBankMatches"
+                        />
+                    </div>
+                </div>
                 <DataTable :value="bankPreviewRows" size="small" scrollable scrollHeight="360px" class="cas-table">
                     <Column header="" style="width: 44px">
                         <template #body="{ data }">
@@ -1728,12 +1832,29 @@ function formatTime(iso: string | null): string {
                         </template>
                     </Column>
                     <Column field="refNo" header="Ref No." style="min-width: 120px" />
+                    <Column header="Match" style="min-width: 240px">
+                        <template #body="{ data }">
+                            <Tag v-if="data.alreadyImported" value="Already imported" severity="secondary" />
+                            <Select
+                                v-else-if="data.hasMatch"
+                                v-model="bankChoice[data.index]"
+                                :options="bankChoiceOptions(data.index)"
+                                optionLabel="label"
+                                optionValue="value"
+                                optionDisabled="disabled"
+                                class="w-full"
+                            />
+                            <span v-else class="text-muted">New</span>
+                        </template>
+                    </Column>
                 </DataTable>
                 <Message v-if="bankError" severity="error" class="mt-msg">{{ bankError }}</Message>
                 <div class="cas-confirm-btns">
                     <Button label="Back" icon="pi pi-arrow-left" text @click="bankStep = 1" />
                     <Button
-                        :label="`Import ${bankIncludedCount} rows`"
+                        :label="bankMergeCount
+                            ? `Import ${bankIncludedCount} rows (${bankMergeCount} merge)`
+                            : `Import ${bankIncludedCount} rows`"
                         icon="pi pi-check"
                         :loading="bankImporting"
                         :disabled="bankIncludedCount === 0"
@@ -1748,6 +1869,9 @@ function formatTime(iso: string | null): string {
                     <i class="pi pi-check-circle cas-done-icon" />
                     <p>
                         <strong>{{ bankImportResult?.imported }}</strong> transactions imported
+                        <span v-if="bankImportResult?.merged">
+                            , <strong>{{ bankImportResult.merged }}</strong> merged into manual entries
+                        </span>
                         <span v-if="bankImportResult?.skipped">
                             ({{ bankImportResult.skipped }} skipped — duplicates or invalid rows)
                         </span>
@@ -1769,6 +1893,13 @@ function formatTime(iso: string | null): string {
 .page-title { font-size: 1.5rem; font-weight: 700; margin: 0 0 1.5rem; }
 
 .bank-upload { margin-top: 1rem; }
+.bank-match-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+.bank-match-msg { flex: 1 1 320px; margin: 0; }
+.bank-match-window { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
+.bank-match-window label { font-size: 0.85rem; color: var(--p-text-muted-color); }
+@media (max-width: 639px) {
+    .bank-match-window { margin-left: 0; width: 100%; }
+}
 .bank-rawgrid { margin-top: 0.75rem; }
 .bank-rawgrid pre {
     max-height: 180px; overflow: auto; font-size: 0.72rem; line-height: 1.3;

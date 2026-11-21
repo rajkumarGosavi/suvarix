@@ -144,7 +144,30 @@ function confirmDelete(item: any) {
 const PAGE_SIZE = 25;
 const filterDateFrom = ref<Date | null>(null);
 const filterType = ref<string | null>(null);
+const filterOrigin = ref<"manual" | "verified" | "imported" | null>(null);
+const ORIGIN_OPTIONS = [
+    { label: "Manual", value: "manual" },
+    { label: "Verified (manual + bank)", value: "verified" },
+    { label: "Imported", value: "imported" },
+];
 const searchQuery = ref("");
+
+// Where a transaction came from: typed in, bank-confirmed manual entry, or imported.
+function originOf(tx: { source?: string | null; externalRef?: string | null }): {
+    label: string; severity: "success" | "secondary" | "info"; icon: string; hint: string;
+} {
+    const src = tx.source ?? "manual";
+    if (src === "manual") {
+        return tx.externalRef
+            ? { label: "Verified", severity: "success", icon: "pi pi-check-circle", hint: "Manual entry confirmed by bank statement" }
+            : { label: "Manual", severity: "secondary", icon: "pi pi-pencil", hint: "Entered manually" };
+    }
+    if (src.startsWith("bank_")) {
+        return { label: src.slice(5).toUpperCase(), severity: "info", icon: "pi pi-building", hint: "Imported from bank statement" };
+    }
+    if (src === "csv_import") return { label: "CSV", severity: "info", icon: "pi pi-file", hint: "Imported from CSV" };
+    return { label: src, severity: "info", icon: "pi pi-download", hint: "Imported" };
+}
 const sortField = ref<"date" | "amount">("date");
 const sortOrder = ref<1 | -1>(-1); // PrimeVue convention: 1 = asc, -1 = desc
 
@@ -157,6 +180,7 @@ function fetchPage(offset: number) {
     store.fetch({
         dateFrom: dateToStr(filterDateFrom.value) ?? undefined,
         type: filterType.value ?? undefined,
+        origin: filterOrigin.value ?? undefined,
         search: searchQuery.value.trim() || undefined,
         sortBy: sortField.value,
         sortDir: sortOrder.value === 1 ? "asc" : "desc",
@@ -178,6 +202,7 @@ function onSearchInput() {
 function clearFilter() {
     filterDateFrom.value = null;
     filterType.value = null;
+    filterOrigin.value = null;
     searchQuery.value = "";
     fetchPage(0);
 }
@@ -283,6 +308,16 @@ onMounted(() => {
                 class="filter-input"
                 @change="applyFilter"
             />
+            <Select
+                v-model="filterOrigin"
+                :options="ORIGIN_OPTIONS"
+                optionLabel="label"
+                optionValue="value"
+                placeholder="All sources"
+                showClear
+                class="filter-input"
+                @change="applyFilter"
+            />
             <Button icon="pi pi-times" text @click="clearFilter" v-tooltip="'Clear filters'" />
         </div>
 
@@ -324,6 +359,16 @@ onMounted(() => {
             <Column field="tag" header="Tag" style="width:110px">
                 <template #body="{ data }">
                     <Tag v-if="data.tag" :value="data.tag" severity="secondary" />
+                </template>
+            </Column>
+            <Column header="Source" style="width:120px">
+                <template #body="{ data }">
+                    <Tag
+                        :value="originOf(data).label"
+                        :icon="originOf(data).icon"
+                        :severity="originOf(data).severity"
+                        v-tooltip="originOf(data).hint"
+                    />
                 </template>
             </Column>
             <Column field="amount" header="Amount" sortable style="width:140px">
@@ -369,6 +414,7 @@ onMounted(() => {
                         <div class="txn-card-tags">
                             <Tag :value="tx.type" />
                             <Tag v-if="tx.tag" :value="tx.tag" severity="secondary" />
+                            <Tag :value="originOf(tx).label" :icon="originOf(tx).icon" :severity="originOf(tx).severity" />
                         </div>
                         <div class="txn-card-meta">
                             <span v-if="tx.category">{{ tx.category }}</span>
